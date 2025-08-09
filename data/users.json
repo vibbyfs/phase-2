@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "username": "Alya Putri",
+    "phone": "+6281234567890",
+    "email": "alya@example.com",
+    "password": "password",
+    "timezone": "Asia/Jakarta",
+    "createdAt": "2025-08-09T14:00:00Z",
+    "updatedAt": "2025-08-09T14:00:00Z"
+  },
+  {
+    "id": 2,
+    "username": "Rizky Hadi",
+    "phone": "+6289876543210",
+    "email": "rizky@example.com",
+    "password": "password",
+    "timezone": "Asia/Jakarta",
+    "createdAt": "2025-08-09T14:05:00Z",
+    "updatedAt": "2025-08-09T14:05:00Z"
+  }
+]
