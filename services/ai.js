@@ -10,80 +10,89 @@ const Extraction = z.object({
   title: z.string().optional(),
   timeText: z.string().optional(),
   recipientPhone: z.string().optional(),
-  dueAtWIB: z.string().optional() // ISO di zona WIB
+  dueAtWIB: z.string().optional()
 });
 
 async function extract(message) {
   const systemMsg = `
 Kamu AI ekstraksi WA. Keluarkan JSON VALID sesuai skema.
-Prinsip:
-- Zona waktu input: ${WIB_TZ}. Wajib isi "dueAtWIB" (ISO) jika ada waktu absolut/relatif: "5 menit lagi", "jam 7", "besok", dll.
-- Kalau judul tidak jelas, ringkas (≤ 5 kata) dari pesan, default "Pengingat".
-- Jika tidak menemukan waktu, JANGAN tanya balik. Biarkan dueAtWIB kosong (controller akan default +5 menit).
-- intent salah satu: create/confirm/cancel/reschedule/snooze/invite/unknown.
-Jangan ada teks lain selain JSON.
+- Zona waktu input: ${WIB_TZ}. Isi "dueAtWIB" (ISO) bila ada waktu absolut/relatif ("5 menit lagi", "jam 7", "besok", dll).
+- Jika judul tidak jelas, ringkas (≤5 kata), default "Pengingat".
+- Jika tak menemukan waktu, biarkan dueAtWIB kosong (controller akan default +5 menit).
+- intent: create/confirm/cancel/reschedule/snooze/invite/unknown.
+JANGAN keluarkan teks selain JSON.
 `.trim();
 
-  const schema = {
-    name: "reminder_extraction",
-    schema: {
-      type: "object",
-      properties: {
-        intent: { enum: ["create","confirm","cancel","reschedule","snooze","invite","unknown"] },
-        title: { type: "string" },
-        timeText: { type: "string" },
-        recipientPhone: { type: "string" },
-        dueAtWIB: { type: "string", format: "date-time" }
-      },
-      required: ["intent"]
-    }
-  };
+  let content = '{}';
+  try {
+    const rsp = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.1,
+      messages: [
+        { role: 'system', content: systemMsg },
+        { role: 'user', content: `Pesan: """${message}"""` }
+      ],
+      // lebih kompatibel daripada json_schema
+      response_format: { type: 'json_object' }
+    });
+    content = rsp.choices?.[0]?.message?.content || '{}';
+  } catch (e) {
+    console.error('OpenAI call failed:', e?.response?.data || e?.message || e);
+    // fallback kosong → nanti controller yang handle +5 menit
+    return { intent: 'unknown', title: 'Pengingat', timeText: null, recipientPhone: null, dueAtWIB: null, dueAtUTC: null };
+  }
 
-  const rsp = await client.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.1,            // stabil untuk ekstraksi
-    messages: [
-      { role: 'system', content: systemMsg },
-      { role: 'user', content: `Pesan: """${message}"""` }
-    ],
-    response_format: { type: "json_schema", json_schema: schema }
-  });
+  // jaga2 kalau model masih kasih teks ekstra
+  const start = content.indexOf('{');
+  const end = content.lastIndexOf('}');
+  const jsonText = start >= 0 && end >= 0 ? content.slice(start, end + 1) : '{}';
 
-  const raw = rsp.choices?.[0]?.message?.content || '{}';
-  const data = JSON.parse(raw);
+  let data;
+  try {
+    data = JSON.parse(jsonText);
+  } catch (e) {
+    console.error('JSON parse failed:', { content });
+    return { intent: 'unknown', title: 'Pengingat', timeText: null, recipientPhone: null, dueAtWIB: null, dueAtUTC: null };
+  }
+
   const parsed = Extraction.safeParse(data);
-  if (!parsed.success) throw new Error('AI extraction failed');
+  if (!parsed.success) {
+    console.error('Zod validation failed:', parsed.error?.flatten?.() || parsed.error);
+    return { intent: 'unknown', title: 'Pengingat', timeText: null, recipientPhone: null, dueAtWIB: null, dueAtUTC: null };
+  }
 
   let dueAtUTC = null;
   if (parsed.data.dueAtWIB) {
-    dueAtUTC = DateTime.fromISO(parsed.data.dueAtWIB, { zone: WIB_TZ }).toUTC().toISO();
+    try {
+      dueAtUTC = DateTime.fromISO(parsed.data.dueAtWIB, { zone: WIB_TZ }).toUTC().toISO();
+    } catch (_) { /* ignore */ }
   }
 
   return { ...parsed.data, dueAtUTC };
 }
 
 async function generateReply(mode, vars) {
-  // Mode balasan super singkat, non-robotik, ≤ 2 baris
   const systemMsg = `
-Tulis jawaban bahasa Indonesia sehari-hari.
-Aturan:
-- Maksimal 2 baris, singkat, to-the-point.
-- Jangan tanya balik berulang.
-- Jangan pakai template kaku; terdengar natural dan ramah.
-- Jika ada waktu, tampilkan WIB jelas.
+Tulis jawaban Indonesia sehari-hari, maksimal 2 baris, to-the-point, ramah.
+Jangan tanya ulang berkali-kali. Tampilkan waktu dalam WIB jika ada.
 `.trim();
 
-  const rsp = await client.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.4,
-    max_tokens: 90,              // biar pendek
-    messages: [
-      { role: 'system', content: systemMsg },
-      { role: 'user', content: JSON.stringify({ mode, vars }) }
-    ]
-  });
-
-  return rsp.choices[0].message.content;
+  try {
+    const rsp = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.4,
+      max_tokens: 90,
+      messages: [
+        { role: 'system', content: systemMsg },
+        { role: 'user', content: JSON.stringify({ mode, vars }) }
+      ]
+    });
+    return rsp.choices[0].message.content;
+  } catch (e) {
+    console.error('OpenAI reply failed:', e?.response?.data || e?.message || e);
+    // fallback singkat
+    return 'Siap! Sudah kuproses ya. Kalau ada yang kurang, kabari aja.';
+  }
 }
 
 module.exports = { extract, generateReply };

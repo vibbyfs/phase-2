@@ -17,32 +17,31 @@ class WaController {
         return res.status(200).json({ action: 'reply', to: from, body });
       }
 
+      // aman walau AI gagal
       const ai = await extract(text);
 
-      // Judul & waktu
       let title = (ai.title || '').trim() || 'Pengingat';
       let dueAtUTC = ai.dueAtUTC;
 
-      // Heuristik waktu relatif ringan
+      // Heuristik ringan
       if (!dueAtUTC) {
         const t = (text || '').toLowerCase();
         const nowWIB = DateTime.now().setZone(WIB_TZ);
         const m = t.match(/(\d+)\s*menit/i);
         const h = t.match(/(\d+)\s*jam/i);
         const besok = /\bbesok\b/i.test(t);
-
         if (m) dueAtUTC = nowWIB.plus({ minutes: Number(m[1]) }).toUTC().toISO();
         else if (h) dueAtUTC = nowWIB.plus({ hours: Number(h[1]) }).toUTC().toISO();
         else if (besok) dueAtUTC = nowWIB.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toUTC().toISO();
       }
 
-      // Jika masih kosong, JANGAN tanya—gunakan default +5 menit
+      // Default tegas: +5 menit
       if (!dueAtUTC) {
         dueAtUTC = DateTime.now().setZone(WIB_TZ).plus({ minutes: 5 }).toUTC().toISO();
       }
 
-      // Hanya proses create; intent lain bisa ditambah kemudian
-      if (ai.intent === 'create' || !ai.intent || ai.intent === 'unknown') {
+      // proses create (atau unknown → treat as create agar tidak bolak-balik klarifikasi)
+      if (ai.intent === 'create' || ai.intent === 'unknown' || !ai.intent) {
         let recipientId = null;
         if (ai.recipientPhone) {
           const recipient = await User.findOne({ where: { phone: ai.recipientPhone } });
@@ -69,15 +68,25 @@ class WaController {
         return res.status(200).json({ action: 'reply', to: from, body });
       }
 
-      // Fallback terakhir (jarang terpakai karena di atas kita sudah default +5 menit)
+      // Mode lain belum diimplement → balas singkat
       const body = await generateReply('success', {
         title,
         when: DateTime.fromISO(dueAtUTC).setZone(WIB_TZ).toFormat("ccc, dd LLL yyyy HH:mm 'WIB'")
       });
       return res.status(200).json({ action: 'reply', to: from, body });
     } catch (err) {
-      console.log('ERROR WA INBOUND', err);
-      next(err);
+      console.error('ERROR WA INBOUND', err);
+      // Pastikan tidak lempar 500 mentah: kirim fallback agar n8n tetap dapat reply
+      try {
+        const { from } = req.body || {};
+        return res.status(200).json({
+          action: 'reply',
+          to: from || '',
+          body: 'Siap! Sudah kuproses ya. Kalau ada yang kurang, kabari aja.'
+        });
+      } catch {
+        next(err);
+      }
     }
   }
 }
