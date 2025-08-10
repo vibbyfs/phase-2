@@ -1,7 +1,7 @@
 const { DateTime } = require('luxon');
 const { User, Reminder, Friend } = require('../models');
 const { scheduleReminder } = require('../services/scheduler');
-const { askAI } = require('../services/aiService');
+const { extract } = require('../services/ai');
 
 const WIB_TZ = 'Asia/Jakarta';
 
@@ -22,7 +22,7 @@ module.exports = {
             }
 
             // Tanya AI
-            const ai = await askAI(text);
+            const ai = await extract(text);
             console.log('[WA] parsed AI:', ai);
 
             let title = (ai.title || '').trim() || 'Pengingat';
