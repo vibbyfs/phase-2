@@ -12,6 +12,7 @@ app.use(cors())
 
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', authentication, require('./routes/users.routes'));
+app.use('/api/reminders', authentication, require('./routes/reminders.routes'));
 
 
 app.use(erroHandler)
