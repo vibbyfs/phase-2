@@ -2,7 +2,7 @@
   {
     "id": 1,
     "UserId": 1,
-    "RecipientId": null,
+    "RecipientId": 1,
     "title": "Meeting dengan tim desain",
     "dueAt": "2025-08-10T03:00:00Z",
     "repeat": "none",
