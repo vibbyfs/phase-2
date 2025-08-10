@@ -61,17 +61,10 @@ module.exports = {
 
             console.log('[WA] final title:', title, 'dueDateJS:', dueDate.toISOString());
 
-            // Buat reminder default RecipientId null (untuk diri sendiri)
-            const reminder = await Reminder.create({
-                UserId: user.id,
-                RecipientId: null,
-                title,
-                dueAt: dueDate,
-                repeat: 'none',
-                status: 'scheduled'
-            });
-
-            // Kalau ada recipientPhone dari AI, update jika valid
+            // Tentukan RecipientId - default ke UserId (untuk diri sendiri)
+            let recipientId = user.id;
+            
+            // Kalau ada recipientPhone dari AI, cek apakah valid
             if (ai.recipientPhone) {
                 const recipient = await User.findOne({ where: { phone: ai.recipientPhone } });
                 if (recipient) {
@@ -79,11 +72,20 @@ module.exports = {
                         where: { UserId: user.id, FriendId: recipient.id, status: 'accepted' }
                     });
                     if (rel) {
-                        reminder.RecipientId = recipient.id;
-                        await reminder.save();
+                        recipientId = recipient.id;
                     }
                 }
             }
+
+            // Buat reminder
+            const reminder = await Reminder.create({
+                UserId: user.id,
+                RecipientId: recipientId,
+                title,
+                dueAt: dueDate,
+                repeat: 'none',
+                status: 'scheduled'
+            });
 
             // Jadwalkan
             await scheduleReminder(reminder);
