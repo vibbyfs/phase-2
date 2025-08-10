@@ -17,30 +17,46 @@ class WaController {
         return res.status(200).json({ action: 'reply', to: from, body });
       }
 
-      // aman walau AI gagal
+      // Ekstraksi AI (robust – aman kalau gagal)
       const ai = await extract(text);
+      console.log('[WA] parsed AI:', ai);
 
+      // Judul & waktu
       let title = (ai.title || '').trim() || 'Pengingat';
       let dueAtUTC = ai.dueAtUTC;
 
-      // Heuristik ringan
+      // Heuristik waktu relatif
       if (!dueAtUTC) {
         const t = (text || '').toLowerCase();
         const nowWIB = DateTime.now().setZone(WIB_TZ);
+
         const m = t.match(/(\d+)\s*menit/i);
         const h = t.match(/(\d+)\s*jam/i);
         const besok = /\bbesok\b/i.test(t);
+
         if (m) dueAtUTC = nowWIB.plus({ minutes: Number(m[1]) }).toUTC().toISO();
         else if (h) dueAtUTC = nowWIB.plus({ hours: Number(h[1]) }).toUTC().toISO();
-        else if (besok) dueAtUTC = nowWIB.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toUTC().toISO();
+        else if (besok) {
+          const d = nowWIB.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 });
+          dueAtUTC = d.toUTC().toISO();
+        }
       }
 
-      // Default tegas: +5 menit
+      // Fallback terakhir: +5 menit dari sekarang (WIB)
       if (!dueAtUTC) {
         dueAtUTC = DateTime.now().setZone(WIB_TZ).plus({ minutes: 5 }).toUTC().toISO();
       }
 
-      // proses create (atau unknown → treat as create agar tidak bolak-balik klarifikasi)
+      // VALIDASI KERAS: pastikan dueAt valid & > now
+      let dueAt = DateTime.fromISO(dueAtUTC);
+      if (!dueAt.isValid || dueAt <= DateTime.utc()) {
+        dueAt = DateTime.now().setZone(WIB_TZ).plus({ minutes: 5 }).toUTC();
+        dueAtUTC = dueAt.toISO();
+      }
+
+      console.log('[WA] final title:', title, 'dueAtUTC:', dueAtUTC);
+
+      // Proses create (treat unknown as create supaya tidak bolak-balik klarifikasi)
       if (ai.intent === 'create' || ai.intent === 'unknown' || !ai.intent) {
         let recipientId = null;
         if (ai.recipientPhone) {
@@ -55,7 +71,7 @@ class WaController {
           UserId: user.id,
           RecipientId: recipientId,
           title,
-          dueAt: new Date(dueAtUTC),
+          dueAt: new Date(dueAtUTC), // valid & future
           repeat: 'none',
           status: 'scheduled'
         });
@@ -76,7 +92,7 @@ class WaController {
       return res.status(200).json({ action: 'reply', to: from, body });
     } catch (err) {
       console.error('ERROR WA INBOUND', err);
-      // Pastikan tidak lempar 500 mentah: kirim fallback agar n8n tetap dapat reply
+      // Fallback agar n8n tetap dapat reply 200
       try {
         const { from } = req.body || {};
         return res.status(200).json({
