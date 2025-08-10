@@ -10,7 +10,17 @@ module.exports = (sequelize, DataTypes) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-      // define association here
+      // Friend belongs to User (user who initiated the friendship)
+      Friend.belongsTo(models.User, {
+        foreignKey: 'UserId',
+        as: 'user'
+      });
+      
+      // Friend belongs to User (friend)
+      Friend.belongsTo(models.User, {
+        foreignKey: 'FriendId',
+        as: 'friend'
+      });
     }
   }
   Friend.init({
@@ -23,10 +33,9 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     status: {
-      type: DataTypes.ENUM('pending', 'accpeted'),
+      type: DataTypes.ENUM('pending', 'accepted'),
       allowNull: false,
       defaultValue: 'pending'
-
     }
   }, {
     sequelize,

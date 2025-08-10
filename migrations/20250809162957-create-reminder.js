@@ -12,10 +12,16 @@ module.exports = {
       UserId: {
         type: Sequelize.INTEGER,
         allowNull: false,
+        references: { model: 'Users', key: 'id' },
+        onUpdate: 'CASCADE',
+        onDelete: 'CASCADE'
       },
       RecipientId: {
         type: Sequelize.INTEGER,
-        allowNull: false
+        allowNull: true,
+        references: { model: 'Users', key: 'id' },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
       },
       title: {
         type: Sequelize.STRING,

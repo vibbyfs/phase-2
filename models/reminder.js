@@ -10,7 +10,17 @@ module.exports = (sequelize, DataTypes) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-      // define association here
+      // Reminder belongs to User (creator)
+      Reminder.belongsTo(models.User, {
+        foreignKey: 'UserId',
+        as: 'creator'
+      });
+      
+      // Reminder belongs to User (recipient)
+      Reminder.belongsTo(models.User, {
+        foreignKey: 'RecipientId',
+        as: 'recipient'
+      });
     }
   }
   Reminder.init({
