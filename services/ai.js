@@ -10,18 +10,18 @@ const Extraction = z.object({
   title: z.string().optional(),
   timeText: z.string().optional(),
   recipientPhone: z.string().optional(),
-  dueAtWIB: z.string().optional() // ISO datetime di zona WIB
+  dueAtWIB: z.string().optional() // ISO di zona WIB
 });
 
 async function extract(message) {
   const systemMsg = `
-Kamu asisten penjadwal lewat WhatsApp.
-- Zona waktu input pengguna: ${WIB_TZ}.
-- Jika pengguna menyebut frasa relatif seperti "5 menit lagi", "2 jam lagi", "besok", "nanti jam 7",
-  WAJIB isi dueAtWIB dalam format ISO (contoh: 2025-08-10T17:00:00+07:00) di zona ${WIB_TZ}.
-- Jika judul tidak jelas, ringkaslah jadi maks 5 kata (contoh: "Bayar listrik").
-- Pilih intent paling relevan (create/confirm/cancel/reschedule/snooze/invite/unknown).
-- Kembalikan HANYA JSON valid sesuai skema.
+Kamu AI ekstraksi WA. Keluarkan JSON VALID sesuai skema.
+Prinsip:
+- Zona waktu input: ${WIB_TZ}. Wajib isi "dueAtWIB" (ISO) jika ada waktu absolut/relatif: "5 menit lagi", "jam 7", "besok", dll.
+- Kalau judul tidak jelas, ringkas (≤ 5 kata) dari pesan, default "Pengingat".
+- Jika tidak menemukan waktu, JANGAN tanya balik. Biarkan dueAtWIB kosong (controller akan default +5 menit).
+- intent salah satu: create/confirm/cancel/reschedule/snooze/invite/unknown.
+Jangan ada teks lain selain JSON.
 `.trim();
 
   const schema = {
@@ -41,6 +41,7 @@ Kamu asisten penjadwal lewat WhatsApp.
 
   const rsp = await client.chat.completions.create({
     model: "gpt-4o-mini",
+    temperature: 0.1,            // stabil untuk ekstraksi
     messages: [
       { role: 'system', content: systemMsg },
       { role: 'user', content: `Pesan: """${message}"""` }
@@ -62,9 +63,20 @@ Kamu asisten penjadwal lewat WhatsApp.
 }
 
 async function generateReply(mode, vars) {
-  const systemMsg = `Balas santai & natural (bahasa Indonesia), jelas, singkat, tanpa template kaku.`;
+  // Mode balasan super singkat, non-robotik, ≤ 2 baris
+  const systemMsg = `
+Tulis jawaban bahasa Indonesia sehari-hari.
+Aturan:
+- Maksimal 2 baris, singkat, to-the-point.
+- Jangan tanya balik berulang.
+- Jangan pakai template kaku; terdengar natural dan ramah.
+- Jika ada waktu, tampilkan WIB jelas.
+`.trim();
+
   const rsp = await client.chat.completions.create({
     model: "gpt-4o-mini",
+    temperature: 0.4,
+    max_tokens: 90,              // biar pendek
     messages: [
       { role: 'system', content: systemMsg },
       { role: 'user', content: JSON.stringify({ mode, vars }) }
