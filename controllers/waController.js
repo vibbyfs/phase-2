@@ -5,6 +5,33 @@ const { extract, generateReply } = require('../services/ai');
 
 const WIB_TZ = 'Asia/Jakarta';
 
+// Fungsi untuk mengekstrak title dari teks jika AI gagal
+function extractTitleFromText(text) {
+    if (!text) return 'Pengingat';
+    
+    const cleanText = text.toLowerCase().trim();
+    
+    // Hilangkan kata-kata waktu dan trigger words
+    const timeWords = /\b(\d+\s*(menit|jam|hari|minggu|bulan|tahun)|besok|lusa|nanti|sekarang|sebentar|segera)\b/gi;
+    const triggerWords = /\b(ingetin|ingatin|reminder|pengingat|tolong|bisa|saya|aku|gua|gue|dong|ya|yah|lagi)\b/gi;
+    
+    let title = cleanText
+        .replace(timeWords, '') // hilangkan kata waktu
+        .replace(triggerWords, '') // hilangkan trigger words
+        .replace(/\s+/g, ' ') // normalize spaces
+        .trim();
+    
+    // Jika masih ada sisa text yang meaningful
+    if (title && title.length > 2) {
+        // Capitalize first letter of each word
+        return title.split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+    }
+    
+    return 'Pengingat';
+}
+
 module.exports = {
     inbound: async (req, res) => {
         try {
@@ -25,7 +52,7 @@ module.exports = {
             const ai = await extract(text);
             console.log('[WA] parsed AI:', ai);
 
-            let title = (ai.title || '').trim() || 'Pengingat';
+            let title = (ai.title || '').trim() || extractTitleFromText(text);
             let dueAtUTC = ai.dueAtUTC;
 
             const t = (text || '').toLowerCase();
@@ -61,6 +88,15 @@ module.exports = {
 
             console.log('[WA] final title:', title, 'dueDateJS:', dueDate.toISOString());
 
+            // Jika AI tidak memberikan formattedMessage atau title berubah, buat formattedMessage baru
+            let formattedMessage = ai.formattedMessage;
+            if (!formattedMessage || (ai.title && ai.title !== title)) {
+                // Buat pesan sederhana yang ramah
+                const userName = user.name || 'Kamu';
+                const timeStr = DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm');
+                formattedMessage = `Hay ${userName} 👋, waktunya untuk *${title}* pada jam ${timeStr} WIB! Jangan lupa ya 😊`;
+            }
+
             // Buat reminder default RecipientId null (untuk diri sendiri)
             const reminder = await Reminder.create({
                 UserId: user.id,
@@ -69,7 +105,7 @@ module.exports = {
                 dueAt: dueDate,
                 repeat: 'none',
                 status: 'scheduled',
-                formattedMessage: ai.formattedMessage // Simpan pesan yang sudah diformat AI
+                formattedMessage: formattedMessage
             });
 
             // Kalau ada recipientPhone dari AI, update jika valid

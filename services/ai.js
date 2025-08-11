@@ -5,6 +5,33 @@ const { DateTime } = require('luxon');
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const WIB_TZ = process.env.WIB_TZ || 'Asia/Jakarta';
 
+// Fungsi untuk mengekstrak title dari teks jika AI gagal
+function extractTitleFromText(text) {
+    if (!text) return 'Pengingat';
+    
+    const cleanText = text.toLowerCase().trim();
+    
+    // Hilangkan kata-kata waktu dan trigger words
+    const timeWords = /\b(\d+\s*(menit|jam|hari|minggu|bulan|tahun)|besok|lusa|nanti|sekarang|sebentar|segera)\b/gi;
+    const triggerWords = /\b(ingetin|ingatin|reminder|pengingat|tolong|bisa|saya|aku|gua|gue|dong|ya|yah|lagi)\b/gi;
+    
+    let title = cleanText
+        .replace(timeWords, '') // hilangkan kata waktu
+        .replace(triggerWords, '') // hilangkan trigger words
+        .replace(/\s+/g, ' ') // normalize spaces
+        .trim();
+    
+    // Jika masih ada sisa text yang meaningful
+    if (title && title.length > 2) {
+        // Capitalize first letter of each word
+        return title.split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+    }
+    
+    return 'Pengingat';
+}
+
 const Extraction = z.object({
   intent: z.enum(['create','confirm','cancel','reschedule','snooze','invite','unknown']),
   title: z.string().optional(),
@@ -22,7 +49,7 @@ Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
 1. EKSTRAKSI DATA: Analisis pesan dan keluarkan JSON dengan struktur:
 {
   "intent": "create/confirm/cancel/reschedule/snooze/invite/unknown",
-  "title": "judul singkat (≤5 kata)",
+  "title": "judul singkat dari aktivitas yang akan diingatkan (≤5 kata, tanpa kata 'pengingat')",
   "recipientName": "nama orang yang akan diingatkan (jika ada)",
   "recipientPhone": "nomor telepon penerima (jika ada)",
   "dueAtWIB": "waktu dalam ISO format zona ${WIB_TZ}",
@@ -31,7 +58,12 @@ Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
 
 2. WAKTU: Zona waktu input ${WIB_TZ}. Isi "dueAtWIB" (ISO) untuk waktu absolut/relatif ("5 menit lagi", "jam 7", "besok", dll).
 
-3. PESAN RAMAH: Buat "formattedMessage" yang:
+3. TITLE: Ekstrak aktivitas dari pesan, JANGAN gunakan kata "pengingat" atau "reminder". 
+   Contoh: "ingetin minum air putih" → title: "Minum Air Putih"
+   Contoh: "tolong ingatkan meeting zoom" → title: "Meeting Zoom"
+   Contoh: "reminder makan obat" → title: "Makan Obat"
+
+4. PESAN RAMAH: Buat "formattedMessage" yang:
    - Mulai dengan sapaan ramah (Hay [nama] 👋)
    - Gunakan emoji yang relevan
    - Highlight bagian penting dengan *bold* untuk WhatsApp
@@ -57,10 +89,10 @@ HANYA keluarkan JSON, tidak ada teks lain.
     content = rsp.choices?.[0]?.message?.content || '{}';
   } catch (e) {
     console.error('OpenAI call failed:', e?.response?.data || e?.message || e);
-    // fallback kosong → nanti controller yang handle +5 menit
+    // fallback menggunakan ekstraksi title yang lebih baik
     return { 
       intent: 'unknown', 
-      title: 'Pengingat', 
+      title: extractTitleFromTextAI(message), 
       timeText: null, 
       recipientPhone: null, 
       recipientName: null,
@@ -82,7 +114,7 @@ HANYA keluarkan JSON, tidak ada teks lain.
     console.error('JSON parse failed:', { content });
     return { 
       intent: 'unknown', 
-      title: 'Pengingat', 
+      title: extractTitleFromTextAI(message), 
       timeText: null, 
       recipientPhone: null, 
       recipientName: null,
@@ -97,7 +129,7 @@ HANYA keluarkan JSON, tidak ada teks lain.
     console.error('Zod validation failed:', parsed.error?.flatten?.() || parsed.error);
     return { 
       intent: 'unknown', 
-      title: 'Pengingat', 
+      title: extractTitleFromTextAI(message), 
       timeText: null, 
       recipientPhone: null, 
       recipientName: null,
@@ -115,6 +147,33 @@ HANYA keluarkan JSON, tidak ada teks lain.
   }
 
   return { ...parsed.data, dueAtUTC };
+}
+
+// Fungsi untuk mengekstrak title dari teks jika AI gagal (duplikat dari waController)
+function extractTitleFromTextAI(text) {
+    if (!text) return 'Pengingat';
+    
+    const cleanText = text.toLowerCase().trim();
+    
+    // Hilangkan kata-kata waktu dan trigger words
+    const timeWords = /\b(\d+\s*(menit|jam|hari|minggu|bulan|tahun)|besok|lusa|nanti|sekarang|sebentar|segera)\b/gi;
+    const triggerWords = /\b(ingetin|ingatin|reminder|pengingat|tolong|bisa|saya|aku|gua|gue|dong|ya|yah|lagi)\b/gi;
+    
+    let title = cleanText
+        .replace(timeWords, '') // hilangkan kata waktu
+        .replace(triggerWords, '') // hilangkan trigger words
+        .replace(/\s+/g, ' ') // normalize spaces
+        .trim();
+    
+    // Jika masih ada sisa text yang meaningful
+    if (title && title.length > 2) {
+        // Capitalize first letter of each word
+        return title.split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+    }
+    
+    return 'Pengingat';
 }
 
 async function generateReply(mode, vars) {
