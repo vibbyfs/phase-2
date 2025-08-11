@@ -40,7 +40,9 @@ const Extraction = z.object({
   recipientName: z.string().optional(),
   recipientUsernames: z.array(z.string()).optional(), // Array of @usernames
   dueAtWIB: z.string().optional(),
-  repeat: z.enum(['none','daily','weekly','monthly']).optional(),
+  repeat: z.enum(['none','daily','weekly','monthly','custom']).optional(),
+  repeatInterval: z.number().optional(), // untuk custom interval dalam menit
+  repeatUnit: z.enum(['minutes','hours','days']).optional(), // unit untuk custom repeat
   formattedMessage: z.string().optional()
 });
 
@@ -51,22 +53,27 @@ Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
 1. EKSTRAKSI DATA: Analisis pesan dan keluarkan JSON dengan struktur:
 {
   "intent": "create/confirm/cancel/reschedule/snooze/invite/unknown",
-  "title": "judul singkat dari aktivitas yang akan diingatkan (≤5 kata, tanpa kata 'pengingat')",
+  "title": "judul singkat dari aktivitas yang akan diingatkan (≤5 kata, tanpa kata 'pengingat' atau 'setiap')",
   "recipientName": "nama orang yang akan diingatkan (jika ada)",
   "recipientPhone": "nomor telepon penerima (jika ada)",
   "recipientUsernames": ["array username dengan @, contoh: ['@john', '@jane']"],
   "dueAtWIB": "waktu dalam ISO format zona ${WIB_TZ}",
-  "repeat": "none/daily/weekly/monthly berdasarkan permintaan user",
+  "repeat": "none/daily/weekly/monthly/custom",
+  "repeatInterval": "angka untuk custom repeat (misal: 5 untuk setiap 5 menit)",
+  "repeatUnit": "minutes/hours/days untuk custom repeat",
   "formattedMessage": "pesan reminder yang ramah dan motivasional"
 }
 
 2. WAKTU: Zona waktu input ${WIB_TZ}. Isi "dueAtWIB" (ISO) untuk waktu absolut/relatif ("5 menit lagi", "jam 7", "besok", dll).
 
 3. REPEAT: Deteksi pola pengulangan:
-   - "setiap hari" / "daily" → "daily"
-   - "setiap minggu" / "weekly" → "weekly"  
-   - "setiap bulan" / "monthly" → "monthly"
-   - default → "none"
+   - "setiap hari" / "daily" → repeat: "daily"
+   - "setiap minggu" / "weekly" → repeat: "weekly"  
+   - "setiap bulan" / "monthly" → repeat: "monthly"
+   - "setiap X menit/jam" → repeat: "custom", repeatInterval: X, repeatUnit: "minutes/hours"
+   - Contoh: "setiap 30 menit" → repeat: "custom", repeatInterval: 30, repeatUnit: "minutes"
+   - Contoh: "setiap 2 jam" → repeat: "custom", repeatInterval: 2, repeatUnit: "hours"
+   - default → repeat: "none"
 
 4. USERNAME TAGGING: Ekstrak @username dari pesan:
    - Contoh: "ingetin @john @jane meeting" → recipientUsernames: ["@john", "@jane"]
@@ -75,7 +82,10 @@ Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
 5. CANCEL INTENT: Deteksi kata "stop", "batal", "cancel", "hapus reminder":
    - Jika ada, set intent: "cancel"
 
-6. TITLE: Ekstrak aktivitas dari pesan, JANGAN gunakan kata "pengingat" atau "reminder". 
+6. TITLE: Ekstrak aktivitas dari pesan, JANGAN gunakan kata "pengingat", "reminder", atau "setiap". 
+   Contoh: "ingetin saya setiap 1 menit minum air putih" → title: "Minum Air Putih"
+   Contoh: "setiap 30 menit ingatkan stretching" → title: "Stretching"
+   Contoh: "tolong reminder meeting zoom setiap hari" → title: "Meeting Zoom" 
    Contoh: "ingetin minum air putih" → title: "Minum Air Putih"
    Contoh: "tolong ingatkan meeting zoom" → title: "Meeting Zoom"
    Contoh: "reminder makan obat" → title: "Makan Obat"
@@ -107,6 +117,7 @@ HANYA keluarkan JSON, tidak ada teks lain.
   } catch (e) {
     console.error('OpenAI call failed:', e?.response?.data || e?.message || e);
     // fallback menggunakan ekstraksi title yang lebih baik
+    const repeatInfo = extractRepeat(message);
     return { 
       intent: 'unknown', 
       title: extractTitleFromTextAI(message), 
@@ -116,7 +127,9 @@ HANYA keluarkan JSON, tidak ada teks lain.
       recipientUsernames: extractUsernames(message),
       dueAtWIB: null, 
       dueAtUTC: null,
-      repeat: extractRepeat(message),
+      repeat: repeatInfo.repeat,
+      repeatInterval: repeatInfo.interval,
+      repeatUnit: repeatInfo.unit,
       formattedMessage: null
     };
   }
@@ -148,6 +161,7 @@ HANYA keluarkan JSON, tidak ada teks lain.
   const parsed = Extraction.safeParse(data);
   if (!parsed.success) {
     console.error('Zod validation failed:', parsed.error?.flatten?.() || parsed.error);
+    const repeatInfo = extractRepeat(message);
     return { 
       intent: 'unknown', 
       title: extractTitleFromTextAI(message), 
@@ -157,7 +171,9 @@ HANYA keluarkan JSON, tidak ada teks lain.
       recipientUsernames: extractUsernames(message),
       dueAtWIB: null, 
       dueAtUTC: null,
-      repeat: extractRepeat(message),
+      repeat: repeatInfo.repeat,
+      repeatInterval: repeatInfo.interval,
+      repeatUnit: repeatInfo.unit,
       formattedMessage: null
     };
   }
@@ -180,7 +196,7 @@ function extractTitleFromTextAI(text) {
     
     // Hilangkan kata-kata waktu dan trigger words
     const timeWords = /\b(\d+\s*(menit|jam|hari|minggu|bulan|tahun)|besok|lusa|nanti|sekarang|sebentar|segera)\b/gi;
-    const triggerWords = /\b(ingetin|ingatin|reminder|pengingat|tolong|bisa|saya|aku|gua|gue|dong|ya|yah|lagi)\b/gi;
+    const triggerWords = /\b(ingetin|ingatin|reminder|pengingat|tolong|bisa|saya|aku|gua|gue|dong|ya|yah|lagi|setiap)\b/gi;
     
     let title = cleanText
         .replace(timeWords, '') // hilangkan kata waktu
@@ -210,15 +226,50 @@ function extractUsernames(text) {
 
 // Fungsi untuk mengekstrak repeat pattern dari teks
 function extractRepeat(text) {
-    if (!text) return 'none';
+    if (!text) return { repeat: 'none', interval: null, unit: null };
     
     const lowerText = text.toLowerCase();
     
-    if (/(setiap\s*hari|daily|harian)/i.test(lowerText)) return 'daily';
-    if (/(setiap\s*minggu|weekly|mingguan)/i.test(lowerText)) return 'weekly';
-    if (/(setiap\s*bulan|monthly|bulanan)/i.test(lowerText)) return 'monthly';
+    // Custom intervals
+    const minuteMatch = lowerText.match(/setiap\s*(\d+)\s*menit/i);
+    if (minuteMatch) {
+        return { 
+            repeat: 'custom', 
+            interval: parseInt(minuteMatch[1]), 
+            unit: 'minutes' 
+        };
+    }
     
-    return 'none';
+    const hourMatch = lowerText.match(/setiap\s*(\d+)\s*jam/i);
+    if (hourMatch) {
+        return { 
+            repeat: 'custom', 
+            interval: parseInt(hourMatch[1]), 
+            unit: 'hours' 
+        };
+    }
+    
+    const dayMatch = lowerText.match(/setiap\s*(\d+)\s*hari/i);
+    if (dayMatch) {
+        return { 
+            repeat: 'custom', 
+            interval: parseInt(dayMatch[1]), 
+            unit: 'days' 
+        };
+    }
+    
+    // Standard repeats
+    if (/(setiap\s*hari|daily|harian)/i.test(lowerText)) {
+        return { repeat: 'daily', interval: null, unit: null };
+    }
+    if (/(setiap\s*minggu|weekly|mingguan)/i.test(lowerText)) {
+        return { repeat: 'weekly', interval: null, unit: null };
+    }
+    if (/(setiap\s*bulan|monthly|bulanan)/i.test(lowerText)) {
+        return { repeat: 'monthly', interval: null, unit: null };
+    }
+    
+    return { repeat: 'none', interval: null, unit: null };
 }
 
 async function generateReply(mode, vars) {

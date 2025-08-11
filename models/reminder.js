@@ -52,6 +52,14 @@ module.exports = (sequelize, DataTypes) => {
     formattedMessage: {
       type: DataTypes.TEXT,
       allowNull: true
+    },
+    repeatInterval: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    repeatUnit: {
+      type: DataTypes.ENUM('minutes', 'hours', 'days'),
+      allowNull: true
     }
   }, {
     sequelize,

@@ -53,6 +53,29 @@ async function scheduleReminder(reminder) {
           reminder.status = 'scheduled';
           await reminder.save();
           await scheduleReminder(reminder);
+        } else if (reminder.repeat === 'custom' && reminder.repeatInterval && reminder.repeatUnit) {
+          // Handle custom repeat intervals
+          let nextDue = new Date(reminder.dueAt);
+          
+          if (reminder.repeatUnit === 'minutes') {
+            nextDue.setMinutes(nextDue.getMinutes() + reminder.repeatInterval);
+          } else if (reminder.repeatUnit === 'hours') {
+            nextDue.setHours(nextDue.getHours() + reminder.repeatInterval);
+          } else if (reminder.repeatUnit === 'days') {
+            nextDue.setDate(nextDue.getDate() + reminder.repeatInterval);
+          }
+          
+          reminder.dueAt = nextDue;
+          reminder.status = 'scheduled';
+          await reminder.save();
+          await scheduleReminder(reminder);
+          
+          console.log('[SCHED] custom repeat scheduled', {
+            id: reminder.id,
+            interval: reminder.repeatInterval,
+            unit: reminder.repeatUnit,
+            nextDue: nextDue.toISOString()
+          });
         } else {
           reminder.status = 'sent';
           await reminder.save();

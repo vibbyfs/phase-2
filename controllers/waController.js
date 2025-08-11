@@ -14,7 +14,7 @@ function extractTitleFromText(text) {
     
     // Hilangkan kata-kata waktu dan trigger words
     const timeWords = /\b(\d+\s*(menit|jam|hari|minggu|bulan|tahun)|besok|lusa|nanti|sekarang|sebentar|segera)\b/gi;
-    const triggerWords = /\b(ingetin|ingatin|reminder|pengingat|tolong|bisa|saya|aku|gua|gue|dong|ya|yah|lagi)\b/gi;
+    const triggerWords = /\b(ingetin|ingatin|reminder|pengingat|tolong|bisa|saya|aku|gua|gue|dong|ya|yah|lagi|setiap)\b/gi;
     
     let title = cleanText
         .replace(timeWords, '') // hilangkan kata waktu
@@ -90,6 +90,8 @@ module.exports = {
             let title = (ai.title || '').trim() || extractTitleFromText(text);
             let dueAtUTC = ai.dueAtUTC;
             let repeat = ai.repeat || 'none';
+            let repeatInterval = ai.repeatInterval || null;
+            let repeatUnit = ai.repeatUnit || null;
 
             const t = (text || '').toLowerCase();
             const nowWIB = DateTime.now().setZone(WIB_TZ);
@@ -185,6 +187,8 @@ module.exports = {
                     title,
                     dueAt: dueDate,
                     repeat: repeat,
+                    repeatInterval: repeatInterval,
+                    repeatUnit: repeatUnit,
                     status: 'scheduled',
                     formattedMessage: formattedMessage
                 });
@@ -199,7 +203,20 @@ module.exports = {
                 ? recipients.map(r => r.name || r.username || 'Unknown').join(', ')
                 : (recipients[0].id === user.id ? 'diri sendiri' : recipients[0].name || recipients[0].username || 'Unknown');
             
-            const repeatText = repeat !== 'none' ? ` (${repeat === 'daily' ? 'setiap hari' : repeat === 'weekly' ? 'setiap minggu' : 'setiap bulan'})` : '';
+            let repeatText = '';
+            if (repeat !== 'none') {
+                if (repeat === 'daily') {
+                    repeatText = ' (setiap hari)';
+                } else if (repeat === 'weekly') {
+                    repeatText = ' (setiap minggu)';
+                } else if (repeat === 'monthly') {
+                    repeatText = ' (setiap bulan)';
+                } else if (repeat === 'custom' && repeatInterval && repeatUnit) {
+                    const unitText = repeatUnit === 'minutes' ? 'menit' : 
+                                   repeatUnit === 'hours' ? 'jam' : 'hari';
+                    repeatText = ` (setiap ${repeatInterval} ${unitText})`;
+                }
+            }
             
             const confirmMsg = await generateReply('confirm', {
                 title,

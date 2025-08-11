@@ -1,7 +1,7 @@
 [
   {
     "id": 1,
-    "username": "Alya Putri",
+    "username": "vibbyfs",
     "phone": "+6281324985365",
     "email": "alya@example.com",
     "password": "password",
@@ -11,8 +11,8 @@
   },
   {
     "id": 2,
-    "username": "Rizky Hadi",
-    "phone": "+6289876543210",
+    "username": "dimas",
+    "phone": "+6287713371997",
     "email": "rizky@example.com",
     "password": "password",
     "timezone": "Asia/Jakarta",
