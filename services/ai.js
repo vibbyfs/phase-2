@@ -33,7 +33,7 @@ function extractTitleFromText(text) {
 }
 
 const Extraction = z.object({
-  intent: z.enum(['create','confirm','cancel','reschedule','snooze','invite','unknown']),
+  intent: z.enum(['create','confirm','cancel','cancel_all','cancel_specific','reschedule','snooze','invite','list','unknown']),
   title: z.string().optional(),
   timeText: z.string().optional(),
   recipientPhone: z.string().optional(),
@@ -43,6 +43,7 @@ const Extraction = z.object({
   repeat: z.enum(['none','daily','weekly','monthly','custom']).optional(),
   repeatInterval: z.number().optional(), // untuk custom interval dalam menit
   repeatUnit: z.enum(['minutes','hours','days']).optional(), // unit untuk custom repeat
+  cancelKeyword: z.string().optional(), // keyword untuk cancel specific reminder
   formattedMessage: z.string().optional()
 });
 
@@ -52,7 +53,7 @@ Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
 
 1. EKSTRAKSI DATA: Analisis pesan dan keluarkan JSON dengan struktur:
 {
-  "intent": "create/confirm/cancel/reschedule/snooze/invite/unknown",
+  "intent": "create/confirm/cancel/cancel_all/cancel_specific/reschedule/snooze/invite/list/unknown",
   "title": "judul singkat dari aktivitas yang akan diingatkan (≤5 kata, tanpa kata 'pengingat' atau 'setiap')",
   "recipientName": "nama orang yang akan diingatkan (jika ada)",
   "recipientPhone": "nomor telepon penerima (jika ada)",
@@ -61,6 +62,7 @@ Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
   "repeat": "none/daily/weekly/monthly/custom",
   "repeatInterval": "angka untuk custom repeat (misal: 5 untuk setiap 5 menit)",
   "repeatUnit": "minutes/hours/days untuk custom repeat",
+  "cancelKeyword": "keyword untuk cancel reminder tertentu",
   "formattedMessage": "pesan reminder yang ramah dan motivasional"
 }
 
@@ -79,10 +81,16 @@ Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
    - Contoh: "ingetin @john @jane meeting" → recipientUsernames: ["@john", "@jane"]
    - Jika ada @username, abaikan recipientPhone dan recipientName
 
-5. CANCEL INTENT: Deteksi kata "stop", "batal", "cancel", "hapus reminder":
-   - Jika ada, set intent: "cancel"
+5. CANCEL INTENT: Deteksi berbagai jenis pembatalan:
+   - "stop reminder", "batal reminder", "cancel reminder" → intent: "cancel" (cancel recurring)
+   - "stop semua reminder", "batal semua", "cancel all" → intent: "cancel_all"
+   - "stop reminder minum air", "batal reminder meeting" → intent: "cancel_specific", cancelKeyword: "minum air"/"meeting"
+   - "list reminder", "tampilkan reminder" → intent: "list"
 
 6. TITLE: Ekstrak aktivitas dari pesan, JANGAN gunakan kata "pengingat", "reminder", atau "setiap". 
+   Contoh: "ingetin saya setiap 1 menit minum air putih" → title: "Minum Air Putih"
+   Contoh: "setiap 30 menit ingatkan stretching" → title: "Stretching"
+   Contoh: "tolong reminder meeting zoom setiap hari" → title: "Meeting Zoom" 
    Contoh: "ingetin saya setiap 1 menit minum air putih" → title: "Minum Air Putih"
    Contoh: "setiap 30 menit ingatkan stretching" → title: "Stretching"
    Contoh: "tolong reminder meeting zoom setiap hari" → title: "Meeting Zoom" 

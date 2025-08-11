@@ -53,16 +53,16 @@ module.exports = {
             const ai = await extract(text);
             console.log('[WA] parsed AI:', ai);
 
-            // Handle CANCEL intent untuk stop reminder
+            // Handle CANCEL intents untuk stop reminder
             if (ai.intent === 'cancel') {
+                // Cancel hanya recurring reminders
                 const activeReminders = await Reminder.findAll({
                     where: { 
                         UserId: user.id, 
                         status: 'scheduled',
-                        repeat: { [Op.ne]: 'none' } // hanya recurring reminders
+                        repeat: { [Op.ne]: 'none' }
                     },
-                    order: [['createdAt', 'DESC']],
-                    limit: 5
+                    order: [['createdAt', 'DESC']]
                 });
 
                 if (activeReminders.length === 0) {
@@ -73,7 +73,6 @@ module.exports = {
                     });
                 }
 
-                // Batalkan semua recurring reminders
                 for (const rem of activeReminders) {
                     rem.status = 'cancelled';
                     await rem.save();
@@ -84,6 +83,105 @@ module.exports = {
                     action: 'reply',
                     to: from,
                     body: `✅ ${activeReminders.length} reminder berulang berhasil dibatalkan!`
+                });
+            }
+
+            if (ai.intent === 'cancel_all') {
+                // Cancel SEMUA reminder (termasuk non-recurring)
+                const allActiveReminders = await Reminder.findAll({
+                    where: { 
+                        UserId: user.id, 
+                        status: 'scheduled'
+                    },
+                    order: [['createdAt', 'DESC']]
+                });
+
+                if (allActiveReminders.length === 0) {
+                    return res.json({
+                        action: 'reply',
+                        to: from,
+                        body: 'Tidak ada reminder aktif untuk dibatalkan 😊'
+                    });
+                }
+
+                for (const rem of allActiveReminders) {
+                    rem.status = 'cancelled';
+                    await rem.save();
+                    cancelReminder(rem.id);
+                }
+
+                return res.json({
+                    action: 'reply',
+                    to: from,
+                    body: `✅ Semua ${allActiveReminders.length} reminder berhasil dibatalkan!`
+                });
+            }
+
+            if (ai.intent === 'cancel_specific' && ai.cancelKeyword) {
+                // Cancel reminder berdasarkan keyword
+                const specificReminders = await Reminder.findAll({
+                    where: { 
+                        UserId: user.id, 
+                        status: 'scheduled',
+                        title: { [Op.iLike]: `%${ai.cancelKeyword}%` }
+                    },
+                    order: [['createdAt', 'DESC']]
+                });
+
+                if (specificReminders.length === 0) {
+                    return res.json({
+                        action: 'reply',
+                        to: from,
+                        body: `Tidak ada reminder aktif yang mengandung kata "${ai.cancelKeyword}" 😊`
+                    });
+                }
+
+                for (const rem of specificReminders) {
+                    rem.status = 'cancelled';
+                    await rem.save();
+                    cancelReminder(rem.id);
+                }
+
+                const reminderTitles = specificReminders.map(r => `"${r.title}"`).join(', ');
+                return res.json({
+                    action: 'reply',
+                    to: from,
+                    body: `✅ ${specificReminders.length} reminder dibatalkan: ${reminderTitles}`
+                });
+            }
+
+            if (ai.intent === 'list') {
+                // Tampilkan daftar reminder aktif
+                const activeReminders = await Reminder.findAll({
+                    where: { 
+                        UserId: user.id, 
+                        status: 'scheduled'
+                    },
+                    order: [['dueAt', 'ASC']],
+                    limit: 10
+                });
+
+                if (activeReminders.length === 0) {
+                    return res.json({
+                        action: 'reply',
+                        to: from,
+                        body: 'Tidak ada reminder aktif saat ini 😊'
+                    });
+                }
+
+                let listMessage = `📋 *Daftar Reminder Aktif (${activeReminders.length}):*\n\n`;
+                activeReminders.forEach((rem, index) => {
+                    const dueTime = DateTime.fromJSDate(rem.dueAt).setZone(WIB_TZ).toFormat('dd/MM HH:mm');
+                    const repeatText = rem.repeat !== 'none' ? ` (${rem.repeat === 'custom' ? `setiap ${rem.repeatInterval} ${rem.repeatUnit}` : rem.repeat})` : '';
+                    listMessage += `${index + 1}. *${rem.title}*\n   📅 ${dueTime} WIB${repeatText}\n\n`;
+                });
+
+                listMessage += '💡 _Ketik "stop reminder [nama]" untuk membatalkan reminder tertentu_';
+
+                return res.json({
+                    action: 'reply',
+                    to: from,
+                    body: listMessage
                 });
             }
 
