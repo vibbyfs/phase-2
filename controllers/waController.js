@@ -1,7 +1,7 @@
 const { DateTime } = require('luxon');
 const { User, Reminder, Friend } = require('../models');
 const { scheduleReminder } = require('../services/scheduler');
-const { extract } = require('../services/ai');
+const { extract, generateReply } = require('../services/ai');
 
 const WIB_TZ = 'Asia/Jakarta';
 
@@ -68,7 +68,8 @@ module.exports = {
                 title,
                 dueAt: dueDate,
                 repeat: 'none',
-                status: 'scheduled'
+                status: 'scheduled',
+                formattedMessage: ai.formattedMessage // Simpan pesan yang sudah diformat AI
             });
 
             // Kalau ada recipientPhone dari AI, update jika valid
@@ -88,10 +89,16 @@ module.exports = {
             // Jadwalkan
             await scheduleReminder(reminder);
 
+            // Buat response konfirmasi yang ramah menggunakan AI
+            const confirmMsg = await generateReply('confirm', {
+                title,
+                dueTime: DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('dd/MM/yyyy HH:mm') + ' WIB'
+            });
+
             return res.json({
                 action: 'reply',
                 to: from,
-                body: `Siap! Pengingat "${title}" sudah dijadwalkan.`
+                body: confirmMsg
             });
         } catch (err) {
             console.error('ERROR WA INBOUND', err);

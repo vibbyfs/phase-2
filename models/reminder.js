@@ -48,7 +48,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('scheduled', 'sent', 'cancelled'),
       allowNull: false,
       defaultValue: 'scheduled'
-
+    },
+    formattedMessage: {
+      type: DataTypes.TEXT,
+      allowNull: true
     }
   }, {
     sequelize,
