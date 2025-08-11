@@ -29,11 +29,20 @@ async function sendWhatsAppResponse(to, message) {
 module.exports = {
     inbound: async (req, res) => {
         try {
-            // Whapify.id webhook format
-            const { from, message } = req.body;
+            // Support both Whapify.id webhook format and custom format
+            const from = req.body.from || req.body.phone;
+            const message = req.body.message;
             const text = message?.text || message || req.body.text;
             
             console.log('[WA] inbound from:', from, 'text:', text);
+
+            // Validate required fields
+            if (!from) {
+                return res.status(400).json({ message: 'Missing phone number (from or phone field)' });
+            }
+            if (!text) {
+                return res.status(400).json({ message: 'Missing message text' });
+            }
 
             // Cari user berdasarkan phone
             const user = await User.findOne({ where: { phone: from } });
@@ -110,7 +119,8 @@ module.exports = {
                 });
 
                 if (specificReminders.length === 0) {
-                    return sendWhatsAppResponse(from, `Tidak ada reminder aktif yang mengandung kata "${ai.cancelKeyword}" 😊`, res);
+                    const response = await sendWhatsAppResponse(from, `Tidak ada reminder aktif yang mengandung kata "${ai.cancelKeyword}" 😊`);
+                    return res.status(200).json(response);
                 }
 
                 for (const rem of specificReminders) {
@@ -120,7 +130,8 @@ module.exports = {
                 }
 
                 const reminderTitles = specificReminders.map(r => `"${r.title}"`).join(', ');
-                return sendWhatsAppResponse(from, `✅ ${specificReminders.length} reminder dibatalkan: ${reminderTitles}`, res);
+                const response = await sendWhatsAppResponse(from, `✅ ${specificReminders.length} reminder dibatalkan: ${reminderTitles}`);
+                return res.status(200).json(response);
             }
 
             if (ai.intent === 'list') {
@@ -135,7 +146,8 @@ module.exports = {
                 });
 
                 if (activeReminders.length === 0) {
-                    return sendWhatsAppResponse(from, 'Tidak ada reminder aktif saat ini 😊', res);
+                    const response = await sendWhatsAppResponse(from, 'Tidak ada reminder aktif saat ini 😊');
+                    return res.status(200).json(response);
                 }
 
                 let listMessage = `📋 *Daftar Reminder Aktif (${activeReminders.length}):*\n\n`;
@@ -147,7 +159,8 @@ module.exports = {
 
                 listMessage += '💡 _Ketik "stop reminder [nama]" untuk membatalkan reminder tertentu_';
 
-                return sendWhatsAppResponse(from, listMessage, res);
+                const response = await sendWhatsAppResponse(from, listMessage);
+                return res.status(200).json(response);
             }
 
             // CREATE REMINDER
@@ -201,7 +214,8 @@ module.exports = {
                     // Cari user berdasarkan username
                     const targetUser = await User.findOne({ where: { username } });
                     if (!targetUser) {
-                        return sendWhatsAppResponse(from, `User @${username} tidak ditemukan. Pastikan username benar dan user sudah terdaftar.`, res);
+                        const response = await sendWhatsAppResponse(from, `User @${username} tidak ditemukan. Pastikan username benar dan user sudah terdaftar.`);
+                        return res.status(200).json(response);
                     }
 
                     // Cek apakah sudah berteman
@@ -215,7 +229,8 @@ module.exports = {
                     });
 
                     if (!friendship) {
-                        return sendWhatsAppResponse(from, `Kamu belum berteman dengan @${username}. Kirim undangan pertemanan dulu ya 😊`, res);
+                        const response = await sendWhatsAppResponse(from, `Kamu belum berteman dengan @${username}. Kirim undangan pertemanan dulu ya 😊`);
+                        return res.status(200).json(response);
                     }
 
                     recipients.push(targetUser);
@@ -275,7 +290,8 @@ module.exports = {
                 count: createdReminders.length
             });
 
-            return sendWhatsAppResponse(from, confirmMsg, res);
+            const response = await sendWhatsAppResponse(from, confirmMsg);
+            return res.status(200).json(response);
         } catch (err) {
             console.error('ERROR WA INBOUND', err);
             return res.status(500).json({ message: 'Internal server error' });
