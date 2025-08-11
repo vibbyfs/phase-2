@@ -8,7 +8,7 @@ const axios = require('axios');
  */
 async function sendReminder(to, text, reminderId) {
   try {
-    const url = `${process.env.WHAPIFY_BASE_URL}/send-message`;
+    const url = `${process.env.WHAPIFY_BASE_URL}/wa_send`;
     const apiKey = process.env.WHAPIFY_API_KEY;
 
     if (!apiKey) {
