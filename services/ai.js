@@ -5,102 +5,160 @@ const { DateTime } = require('luxon');
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const WIB_TZ = process.env.WIB_TZ || 'Asia/Jakarta';
 
-/**
- * Skema hasil ekstraksi:
- * - targetName: nama penerima (“Budi”) bila disebut
- * - recipientPhone: nomor bila disebut
- * - message: judul/aktivitas (“meeting proyek”)
- * - dueAtWIB: ISO WIB bila ada (relatif/absolut)
- * - formattedMessage: teks WA siap kirim (2 baris, friendly)
- * - intent: create/confirm/cancel/reschedule/snooze/invite/unknown
- */
 const Extraction = z.object({
   intent: z.enum(['create','confirm','cancel','reschedule','snooze','invite','unknown']),
-  targetName: z.string().optional(),
+  title: z.string().optional(),
+  timeText: z.string().optional(),
   recipientPhone: z.string().optional(),
-  message: z.string().optional(),
+  recipientName: z.string().optional(),
   dueAtWIB: z.string().optional(),
   formattedMessage: z.string().optional()
 });
 
-async function extract(userMessage) {
+async function extract(message) {
   const systemMsg = `
-Kamu asisten WhatsApp yang paham konteks sehari-hari.
-Keluarkan JSON VALID sesuai skema berikut (TANPA teks lain):
+Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
+
+1. EKSTRAKSI DATA: Analisis pesan dan keluarkan JSON dengan struktur:
 {
-  "intent": "create|confirm|cancel|reschedule|snooze|invite|unknown",
-  "targetName": "<nama penerima jika disebut, contoh: Budi>",
-  "recipientPhone": "<nomor telepon jika disebut, E.164 tanpa spasi, contoh: +62812...>",
-  "message": "<judul singkat 2–4 kata, contoh: meeting proyek>",
-  "dueAtWIB": "<datetime ISO zona Asia/Jakarta jika ada waktu absolut/relatif>",
-  "formattedMessage": "Hay <nama/teman> 👋, sudah waktunya *<message>*! Semangat dan semoga sukses 💪"
+  "intent": "create/confirm/cancel/reschedule/snooze/invite/unknown",
+  "title": "judul singkat (≤5 kata)",
+  "recipientName": "nama orang yang akan diingatkan (jika ada)",
+  "recipientPhone": "nomor telepon penerima (jika ada)",
+  "dueAtWIB": "waktu dalam ISO format zona ${WIB_TZ}",
+  "formattedMessage": "pesan reminder yang ramah dan motivasional"
 }
-Aturan:
-- Zona input: ${WIB_TZ}. Jika ada frasa waktu (5 menit lagi, jam 8 pagi, besok), hitung dan isi dueAtWIB (ISO WIB).
-- Jika judul tak jelas, ringkas dari pesan; default "Pengingat".
-- Jika tidak menemukan waktu, biarkan dueAtWIB kosong (backend akan default +5 menit).
-- formattedMessage harus ramah, maksimal 2 baris, pakai *bold* untuk highlight.
+
+2. WAKTU: Zona waktu input ${WIB_TZ}. Isi "dueAtWIB" (ISO) untuk waktu absolut/relatif ("5 menit lagi", "jam 7", "besok", dll).
+
+3. PESAN RAMAH: Buat "formattedMessage" yang:
+   - Mulai dengan sapaan ramah (Hay [nama] 👋)
+   - Gunakan emoji yang relevan
+   - Highlight bagian penting dengan *bold* untuk WhatsApp
+   - Tambahkan motivasi singkat
+   - Contoh: "Hay Budi 👋, sudah waktunya *meeting proyek*! Semangat dan semoga sukses 💪"
+
+4. FALLBACK: Jika judul tidak jelas, ringkas dari konteks. Jika tak ada waktu, kosongkan dueAtWIB.
+
+HANYA keluarkan JSON, tidak ada teks lain.
 `.trim();
 
   let content = '{}';
   try {
     const rsp = await client.chat.completions.create({
       model: 'gpt-4o-mini',
-      temperature: 0.2,
+      temperature: 0.3,
       messages: [
         { role: 'system', content: systemMsg },
-        { role: 'user', content: `Pesan pengguna: """${userMessage}"""` }
+        { role: 'user', content: `Pesan: """${message}"""` }
       ],
-      // lebih kompatibel di banyak versi SDK
       response_format: { type: 'json_object' }
     });
     content = rsp.choices?.[0]?.message?.content || '{}';
   } catch (e) {
-    console.error('OpenAI extract failed:', e?.response?.data || e?.message || e);
-    return { intent: 'unknown' };
+    console.error('OpenAI call failed:', e?.response?.data || e?.message || e);
+    // fallback kosong → nanti controller yang handle +5 menit
+    return { 
+      intent: 'unknown', 
+      title: 'Pengingat', 
+      timeText: null, 
+      recipientPhone: null, 
+      recipientName: null,
+      dueAtWIB: null, 
+      dueAtUTC: null,
+      formattedMessage: null
+    };
   }
 
-  // jaga-jaga jika ada noise
+  // jaga2 kalau model masih kasih teks ekstra
   const start = content.indexOf('{');
   const end = content.lastIndexOf('}');
-  const jsonText = (start >= 0 && end >= 0) ? content.slice(start, end + 1) : '{}';
+  const jsonText = start >= 0 && end >= 0 ? content.slice(start, end + 1) : '{}';
 
   let data;
-  try { data = JSON.parse(jsonText); } 
-  catch { return { intent: 'unknown' }; }
+  try {
+    data = JSON.parse(jsonText);
+  } catch (e) {
+    console.error('JSON parse failed:', { content });
+    return { 
+      intent: 'unknown', 
+      title: 'Pengingat', 
+      timeText: null, 
+      recipientPhone: null, 
+      recipientName: null,
+      dueAtWIB: null, 
+      dueAtUTC: null,
+      formattedMessage: null
+    };
+  }
 
   const parsed = Extraction.safeParse(data);
-  if (!parsed.success) return { intent: 'unknown' };
+  if (!parsed.success) {
+    console.error('Zod validation failed:', parsed.error?.flatten?.() || parsed.error);
+    return { 
+      intent: 'unknown', 
+      title: 'Pengingat', 
+      timeText: null, 
+      recipientPhone: null, 
+      recipientName: null,
+      dueAtWIB: null, 
+      dueAtUTC: null,
+      formattedMessage: null
+    };
+  }
 
-  // konversi ke UTC kalau ada dueAtWIB
   let dueAtUTC = null;
   if (parsed.data.dueAtWIB) {
     try {
       dueAtUTC = DateTime.fromISO(parsed.data.dueAtWIB, { zone: WIB_TZ }).toUTC().toISO();
-    } catch (_) { /* noop */ }
+    } catch (_) { /* ignore */ }
   }
 
   return { ...parsed.data, dueAtUTC };
 }
 
 async function generateReply(mode, vars) {
-  // Jawaban konfirmasi singkat maksimal 2 baris.
   const systemMsg = `
-Tulis jawaban Indonesia sehari-hari, hangat, maksimal 2 baris.
-Jangan bertele-tele. Jika ada waktu, sebutkan jelas dalam WIB.
+Kamu adalah asisten WhatsApp yang ramah dan natural dalam bahasa Indonesia sehari-hari.
+
+Tugas: Buat balasan yang:
+- Hangat dan ramah (gunakan emoji yang tepat)
+- Singkat tapi informatif (maksimal 2 baris)
+- Menunjukkan kepercayaan diri dan positif
+- Tampilkan waktu dalam format yang mudah dibaca (WIB)
+
+Mode yang tersedia:
+- "confirm": Konfirmasi reminder berhasil dibuat
+- "error": Ada kesalahan dalam pemrosesan
+- "success": Operasi berhasil
+- "info": Memberikan informasi
+
+Gaya bahasa: Seperti teman yang membantu, bukan robot formal.
 `.trim();
 
-  const rsp = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    temperature: 0.4,
-    max_tokens: 90,
-    messages: [
-      { role: 'system', content: systemMsg },
-      { role: 'user', content: JSON.stringify({ mode, vars }) }
-    ]
-  });
-
-  return rsp.choices[0].message.content;
+  try {
+    const rsp = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.4,
+      max_tokens: 100,
+      messages: [
+        { role: 'system', content: systemMsg },
+        { role: 'user', content: JSON.stringify({ mode, vars }) }
+      ]
+    });
+    return rsp.choices[0].message.content;
+  } catch (e) {
+    console.error('OpenAI reply failed:', e?.response?.data || e?.message || e);
+    // fallback yang lebih ramah
+    switch (mode) {
+      case 'confirm':
+        return '✅ Siap! Remindernya sudah kusiapkan. Nanti aku ingatkan tepat waktu ya! 😊';
+      case 'error':
+        return '😅 Oops, ada sedikit kendala. Coba ulangi lagi ya, atau hubungi admin kalau masih bermasalah.';
+      default:
+        return '👌 Oke, sudah kuproses! Kalau ada yang kurang jelas, kabari aja ya.';
+    }
+  }
 }
 
 module.exports = { extract, generateReply };

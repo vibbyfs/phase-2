@@ -8,27 +8,24 @@ async function scheduleReminder(reminder) {
   try {
     if (!reminder || reminder.status !== 'scheduled') return;
     const runAt = new Date(reminder.dueAt);
-    if (isNaN(runAt.getTime()) || runAt <= new Date()) {
+    if (!(runAt instanceof Date) || isNaN(runAt.getTime()) || runAt <= new Date()) {
       console.log('[SCHED] skip (invalid/past)', { id: reminder.id, dueAt: reminder.dueAt });
       return;
     }
 
-    // batalin jika ada job lama
+    // Batalkan job lama bila ada
     cancelReminder(reminder.id);
 
+    console.log('[SCHED] create job', { id: reminder.id, runAt: runAt.toISOString() });
     const job = schedule.scheduleJob(reminder.id.toString(), runAt, async () => {
       try {
+        console.log('[SCHED] fire job', { id: reminder.id, at: new Date().toISOString() });
         const owner = await User.findByPk(reminder.UserId);
         const recipient = reminder.RecipientId ? await User.findByPk(reminder.RecipientId) : owner;
+        const to = recipient.phone;
 
-        // Pesan outbound: human-friendly, 2 baris, pakai *bold*
-        const name = recipient?.name || 'teman';
-        const pretty = `Hay ${name} 👋, sudah waktunya *${reminder.title}*!` +
-                       `\nSemangat dan semoga sukses 💪`;
+        await sendReminder(to, `⏰ Pengingat: ${reminder.title}`, reminder.id);
 
-        await sendReminder(recipient.phone, pretty, reminder.id);
-
-        // handle repeat
         if (reminder.repeat === 'daily') {
           reminder.dueAt = new Date(reminder.dueAt.getTime() + 24 * 60 * 60 * 1000);
           reminder.status = 'scheduled';
@@ -49,7 +46,6 @@ async function scheduleReminder(reminder) {
     });
 
     jobs[reminder.id] = job;
-    console.log('[SCHED] job created', { id: reminder.id, runAt: runAt.toISOString() });
   } catch (e) {
     console.error('[SCHED] scheduleReminder error', e);
   }
@@ -59,16 +55,16 @@ function cancelReminder(reminderId) {
   const job = jobs[reminderId];
   if (job) {
     job.cancel();
+    console.log('[SCHED] cancel job', reminderId);
     delete jobs[reminderId];
-    console.log('[SCHED] job cancelled', reminderId);
   }
 }
 
 async function loadAllScheduledReminders() {
   try {
     const reminders = await Reminder.findAll({ where: { status: 'scheduled' } });
+    console.log('[SCHED] load scheduled count:', reminders.length);
     for (const r of reminders) await scheduleReminder(r);
-    console.log('[SCHED] loaded', reminders.length, 'jobs');
   } catch (e) {
     console.error('[SCHED] loadAllScheduledReminders error', e);
   }
