@@ -2,7 +2,7 @@
 /** @type {import('sequelize-cli').Migration} */
 module.exports = {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable('Reminders', {
+    await queryInterface.createTable('Friends', {
       id: {
         allowNull: false,
         autoIncrement: true,
@@ -16,29 +16,17 @@ module.exports = {
         onUpdate: 'CASCADE',
         onDelete: 'CASCADE'
       },
-      RecipientId: {
+      FriendId: {
         type: Sequelize.INTEGER,
-        allowNull: true,
+        allowNull: false,
         references: { model: 'Users', key: 'id' },
         onUpdate: 'CASCADE',
-        onDelete: 'SET NULL'
-      },
-      title: {
-        type: Sequelize.STRING,
-        allowNull: false
-      },
-      dueAt: {
-        type: Sequelize.DATE,
-        allowNull: false
-      },
-      repeat: {
-        type: Sequelize.STRING,
-        allowNull: false
+        onDelete: 'CASCADE'
       },
       status: {
-        type: Sequelize.ENUM('scheduled', 'sent', 'cancelled'),
+        type: Sequelize.ENUM('pending', 'accepted'),
         allowNull: false,
-        defaultValue: 'scheduled'
+        defaultValue: 'pending'
       },
       createdAt: {
         allowNull: false,
@@ -49,8 +37,14 @@ module.exports = {
         type: Sequelize.DATE
       }
     });
+
+    // Add indexes for better performance
+    await queryInterface.addIndex('Friends', ['UserId', 'FriendId'], {
+      unique: true,
+      name: 'unique_friendship'
+    });
   },
   async down(queryInterface, Sequelize) {
-    await queryInterface.dropTable('Reminders');
+    await queryInterface.dropTable('Friends');
   }
 };

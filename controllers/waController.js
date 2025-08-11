@@ -2,37 +2,16 @@ const { DateTime } = require('luxon');
 const { User, Reminder, Friend } = require('../models');
 const { Op } = require('sequelize');
 const { scheduleReminder, cancelReminder } = require('../services/scheduler');
-const { extract, generateReply } = require('../services/ai');
+const { extract, generateReply, extractTitleFromText } = require('../services/ai');
 
 const WIB_TZ = 'Asia/Jakarta';
 
-// Fungsi untuk mengekstrak title dari teks jika AI gagal
-function extractTitleFromText(text) {
-    if (!text) return 'Pengingat';
-    
-    const cleanText = text.toLowerCase().trim();
-    
-    // Hilangkan kata-kata waktu dan trigger words
-    const timeWords = /\b(\d+\s*(menit|jam|hari|minggu|bulan|tahun)|besok|lusa|nanti|sekarang|sebentar|segera)\b/gi;
-    const triggerWords = /\b(ingetin|ingatin|reminder|pengingat|tolong|bisa|saya|aku|gua|gue|dong|ya|yah|lagi|setiap)\b/gi;
-    
-    let title = cleanText
-        .replace(timeWords, '') // hilangkan kata waktu
-        .replace(triggerWords, '') // hilangkan trigger words
-        .replace(/\s+/g, ' ') // normalize spaces
-        .trim();
-    
-    // Jika masih ada sisa text yang meaningful
-    if (title && title.length > 2) {
-        // Capitalize first letter of each word
-        return title.split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-    }
-    
-    return 'Pengingat';
-}
-
+/**
+ * Simplified WA Controller untuk fitur yang dipersempit:
+ * 1. User buat reminder untuk diri sendiri (hourly/daily/weekly/monthly)
+ * 2. User kirim reminder sekali ke teman dengan @username
+ * 3. Stop reminder dengan natural language
+ */
 module.exports = {
     inbound: async (req, res) => {
         try {
@@ -49,7 +28,7 @@ module.exports = {
                 });
             }
 
-            // Tanya AI
+            // Extract pesan menggunakan AI
             const ai = await extract(text);
             console.log('[WA] parsed AI:', ai);
 
@@ -172,7 +151,7 @@ module.exports = {
                 let listMessage = `📋 *Daftar Reminder Aktif (${activeReminders.length}):*\n\n`;
                 activeReminders.forEach((rem, index) => {
                     const dueTime = DateTime.fromJSDate(rem.dueAt).setZone(WIB_TZ).toFormat('dd/MM HH:mm');
-                    const repeatText = rem.repeat !== 'none' ? ` (${rem.repeat === 'custom' ? `setiap ${rem.repeatInterval} ${rem.repeatUnit}` : rem.repeat})` : '';
+                    const repeatText = rem.repeat !== 'none' ? ` (${rem.repeat})` : '';
                     listMessage += `${index + 1}. *${rem.title}*\n   📅 ${dueTime} WIB${repeatText}\n\n`;
                 });
 
@@ -185,16 +164,15 @@ module.exports = {
                 });
             }
 
+            // CREATE REMINDER
             let title = (ai.title || '').trim() || extractTitleFromText(text);
-            let dueAtUTC = ai.dueAtUTC;
+            let dueAtUTC = ai.dueAtWIB;
             let repeat = ai.repeat || 'none';
-            let repeatInterval = ai.repeatInterval || null;
-            let repeatUnit = ai.repeatUnit || null;
 
             const t = (text || '').toLowerCase();
             const nowWIB = DateTime.now().setZone(WIB_TZ);
 
-            // Heuristik fallback waktu
+            // Heuristik fallback waktu jika AI tidak mendeteksi
             if (!dueAtUTC) {
                 const m = t.match(/(\d+)\s*menit/i);
                 const h = t.match(/(\d+)\s*jam/i);
@@ -211,7 +189,7 @@ module.exports = {
                 }
             }
 
-            // Fallback keras: +5 menit
+            // Fallback: +5 menit
             if (!dueAtUTC) {
                 dueAtUTC = nowWIB.plus({ minutes: 5 }).toUTC().toISO();
             }
@@ -224,56 +202,55 @@ module.exports = {
 
             console.log('[WA] final title:', title, 'dueDateJS:', dueDate.toISOString(), 'repeat:', repeat);
 
-            // Cari recipients berdasarkan username jika ada
-            let recipients = [];
-            if (ai.recipientUsernames && ai.recipientUsernames.length > 0) {
-                console.log('[WA] searching for usernames:', ai.recipientUsernames);
-                for (const username of ai.recipientUsernames) {
-                    const cleanUsername = username.replace('@', '');
-                    // Cari user berdasarkan username (asumsi field username ada di tabel User)
-                    const targetUser = await User.findOne({ where: { username: cleanUsername } });
-                    if (targetUser) {
-                        // Cek apakah adalah teman yang diterima
-                        const friendship = await Friend.findOne({
-                            where: { 
-                                UserId: user.id, 
-                                FriendId: targetUser.id, 
-                                status: 'accepted' 
-                            }
-                        });
-                        if (friendship) {
-                            recipients.push(targetUser);
-                        }
-                    }
-                }
-            }
-
-            // Jika tidak ada recipients dari username, cek recipientPhone
-            if (recipients.length === 0 && ai.recipientPhone) {
-                const recipient = await User.findOne({ where: { phone: ai.recipientPhone } });
-                if (recipient) {
-                    const rel = await Friend.findOne({
-                        where: { UserId: user.id, FriendId: recipient.id, status: 'accepted' }
-                    });
-                    if (rel) {
-                        recipients.push(recipient);
-                    }
-                }
-            }
-
-            // Jika masih tidak ada recipients, buat untuk diri sendiri
-            if (recipients.length === 0) {
-                recipients.push(user);
-            }
-
+            // Cari recipients berdasarkan @username atau default ke user sendiri
+            let recipients = [user]; // Default: reminder untuk diri sendiri
             const createdReminders = [];
+
+            if (ai.recipientUsernames && ai.recipientUsernames.length > 0) {
+                // Cari teman berdasarkan username
+                recipients = [];
+                for (const taggedUsername of ai.recipientUsernames) {
+                    const username = taggedUsername.replace('@', '');
+                    
+                    // Cari user berdasarkan username
+                    const targetUser = await User.findOne({ where: { username } });
+                    if (!targetUser) {
+                        return res.json({
+                            action: 'reply',
+                            to: from,
+                            body: `User @${username} tidak ditemukan. Pastikan username benar dan user sudah terdaftar.`
+                        });
+                    }
+
+                    // Cek apakah sudah berteman
+                    const friendship = await Friend.findOne({
+                        where: {
+                            [Op.or]: [
+                                { UserId: user.id, FriendId: targetUser.id, status: 'accepted' },
+                                { UserId: targetUser.id, FriendId: user.id, status: 'accepted' }
+                            ]
+                        }
+                    });
+
+                    if (!friendship) {
+                        return res.json({
+                            action: 'reply',
+                            to: from,
+                            body: `Kamu belum berteman dengan @${username}. Kirim undangan pertemanan dulu ya 😊`
+                        });
+                    }
+
+                    recipients.push(targetUser);
+                }
+
+                // Jika ada username tagging, reminder harus 'none' (sekali saja)
+                repeat = 'none';
+            }
 
             // Buat reminder untuk setiap recipient
             for (const recipient of recipients) {
-                // Jika AI tidak memberikan formattedMessage atau title berubah, buat formattedMessage baru
                 let formattedMessage = ai.formattedMessage;
-                if (!formattedMessage || (ai.title && ai.title !== title)) {
-                    // Buat pesan sederhana yang ramah
+                if (!formattedMessage) {
                     const recipientName = recipient.name || recipient.username || 'Kamu';
                     const timeStr = DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm');
                     formattedMessage = `Hay ${recipientName} 👋, waktunya untuk *${title}* pada jam ${timeStr} WIB! Jangan lupa ya 😊`;
@@ -285,8 +262,6 @@ module.exports = {
                     title,
                     dueAt: dueDate,
                     repeat: repeat,
-                    repeatInterval: repeatInterval,
-                    repeatUnit: repeatUnit,
                     status: 'scheduled',
                     formattedMessage: formattedMessage
                 });
@@ -303,16 +278,14 @@ module.exports = {
             
             let repeatText = '';
             if (repeat !== 'none') {
-                if (repeat === 'daily') {
+                if (repeat === 'hourly') {
+                    repeatText = ' (setiap jam)';
+                } else if (repeat === 'daily') {
                     repeatText = ' (setiap hari)';
                 } else if (repeat === 'weekly') {
                     repeatText = ' (setiap minggu)';
                 } else if (repeat === 'monthly') {
                     repeatText = ' (setiap bulan)';
-                } else if (repeat === 'custom' && repeatInterval && repeatUnit) {
-                    const unitText = repeatUnit === 'minutes' ? 'menit' : 
-                                   repeatUnit === 'hours' ? 'jam' : 'hari';
-                    repeatText = ` (setiap ${repeatInterval} ${unitText})`;
                 }
             }
             

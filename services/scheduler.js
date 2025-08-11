@@ -28,13 +28,19 @@ async function scheduleReminder(reminder) {
         const message = reminder.formattedMessage || `⏰ Pengingat: ${reminder.title}`;
         await sendReminder(to, message, reminder.id);
 
-        if (reminder.repeat === 'daily') {
-          reminder.dueAt = new Date(reminder.dueAt.getTime() + 24 * 60 * 60 * 1000);
+        // Handle repeat patterns - disederhanakan hanya hourly, daily, weekly, monthly
+        if (reminder.repeat === 'hourly') {
+          reminder.dueAt = new Date(reminder.dueAt.getTime() + 60 * 60 * 1000); // +1 hour
+          reminder.status = 'scheduled';
+          await reminder.save();
+          await scheduleReminder(reminder);
+        } else if (reminder.repeat === 'daily') {
+          reminder.dueAt = new Date(reminder.dueAt.getTime() + 24 * 60 * 60 * 1000); // +1 day
           reminder.status = 'scheduled';
           await reminder.save();
           await scheduleReminder(reminder);
         } else if (reminder.repeat === 'weekly') {
-          reminder.dueAt = new Date(reminder.dueAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+          reminder.dueAt = new Date(reminder.dueAt.getTime() + 7 * 24 * 60 * 60 * 1000); // +7 days
           reminder.status = 'scheduled';
           await reminder.save();
           await scheduleReminder(reminder);
@@ -53,30 +59,8 @@ async function scheduleReminder(reminder) {
           reminder.status = 'scheduled';
           await reminder.save();
           await scheduleReminder(reminder);
-        } else if (reminder.repeat === 'custom' && reminder.repeatInterval && reminder.repeatUnit) {
-          // Handle custom repeat intervals
-          let nextDue = new Date(reminder.dueAt);
-          
-          if (reminder.repeatUnit === 'minutes') {
-            nextDue.setMinutes(nextDue.getMinutes() + reminder.repeatInterval);
-          } else if (reminder.repeatUnit === 'hours') {
-            nextDue.setHours(nextDue.getHours() + reminder.repeatInterval);
-          } else if (reminder.repeatUnit === 'days') {
-            nextDue.setDate(nextDue.getDate() + reminder.repeatInterval);
-          }
-          
-          reminder.dueAt = nextDue;
-          reminder.status = 'scheduled';
-          await reminder.save();
-          await scheduleReminder(reminder);
-          
-          console.log('[SCHED] custom repeat scheduled', {
-            id: reminder.id,
-            interval: reminder.repeatInterval,
-            unit: reminder.repeatUnit,
-            nextDue: nextDue.toISOString()
-          });
         } else {
+          // Reminder sekali (none) - mark as sent
           reminder.status = 'sent';
           await reminder.save();
         }

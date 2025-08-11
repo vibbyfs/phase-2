@@ -11,7 +11,8 @@ module.exports = {
       },
       username: {
         type: Sequelize.STRING,
-        allowNull: false
+        allowNull: false,
+        unique: true
       },
       phone: {
         type: Sequelize.STRING,
@@ -27,9 +28,14 @@ module.exports = {
         type: Sequelize.STRING,
         allowNull: false
       },
+      name: {
+        type: Sequelize.STRING,
+        allowNull: true
+      },
       timezone: {
         type: Sequelize.STRING,
-        allowNull: false
+        allowNull: false,
+        defaultValue: 'Asia/Jakarta'
       },
       createdAt: {
         allowNull: false,

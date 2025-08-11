@@ -41,8 +41,9 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false
     },
     repeat: {
-      type: DataTypes.STRING,
-      allowNull: false
+      type: DataTypes.ENUM('none', 'hourly', 'daily', 'weekly', 'monthly'),
+      allowNull: false,
+      defaultValue: 'none'
     },
     status: {
       type: DataTypes.ENUM('scheduled', 'sent', 'cancelled'),
@@ -51,14 +52,6 @@ module.exports = (sequelize, DataTypes) => {
     },
     formattedMessage: {
       type: DataTypes.TEXT,
-      allowNull: true
-    },
-    repeatInterval: {
-      type: DataTypes.INTEGER,
-      allowNull: true
-    },
-    repeatUnit: {
-      type: DataTypes.ENUM('minutes', 'hours', 'days'),
       allowNull: true
     }
   }, {
