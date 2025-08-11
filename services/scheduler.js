@@ -24,7 +24,9 @@ async function scheduleReminder(reminder) {
         const recipient = reminder.RecipientId ? await User.findByPk(reminder.RecipientId) : owner;
         const to = recipient.phone;
 
-        await sendReminder(to, `⏰ Pengingat: ${reminder.title}`, reminder.id);
+        // Gunakan formattedMessage jika ada, jika tidak gunakan format default
+        const message = reminder.formattedMessage || `⏰ Pengingat: ${reminder.title}`;
+        await sendReminder(to, message, reminder.id);
 
         if (reminder.repeat === 'daily') {
           reminder.dueAt = new Date(reminder.dueAt.getTime() + 24 * 60 * 60 * 1000);
