@@ -3,8 +3,22 @@ const { User, Reminder, Friend } = require('../models');
 const { Op } = require('sequelize');
 const { scheduleReminder, cancelReminder } = require('../services/scheduler');
 const { extract, generateReply, extractTitleFromText } = require('../services/ai');
+const { sendReminder } = require('../services/waOutbound');
 
 const WIB_TZ = 'Asia/Jakarta';
+
+/**
+ * Helper function to send WhatsApp response
+ */
+async function sendWhatsAppResponse(to, message) {
+    try {
+        await sendReminder(to, message, null);
+        return { success: true, message: 'Response sent successfully' };
+    } catch (error) {
+        console.error('[WA] Failed to send response:', error);
+        return { success: false, error: error.message };
+    }
+}
 
 /**
  * Simplified WA Controller untuk fitur yang dipersempit:
@@ -15,17 +29,17 @@ const WIB_TZ = 'Asia/Jakarta';
 module.exports = {
     inbound: async (req, res) => {
         try {
-            const { from, text } = req.body;
+            // Whapify.id webhook format
+            const { from, message } = req.body;
+            const text = message?.text || message || req.body.text;
+            
             console.log('[WA] inbound from:', from, 'text:', text);
 
             // Cari user berdasarkan phone
             const user = await User.findOne({ where: { phone: from } });
             if (!user) {
-                return res.json({
-                    action: 'reply',
-                    to: from,
-                    body: 'Nomormu belum terdaftar di sistem. Silakan daftar dulu ya 😊'
-                });
+                const response = await sendWhatsAppResponse(from, 'Nomormu belum terdaftar di sistem. Silakan daftar dulu ya 😊');
+                return res.status(200).json(response);
             }
 
             // Extract pesan menggunakan AI
@@ -45,11 +59,8 @@ module.exports = {
                 });
 
                 if (activeReminders.length === 0) {
-                    return res.json({
-                        action: 'reply',
-                        to: from,
-                        body: 'Tidak ada reminder berulang yang aktif untuk dibatalkan 😊'
-                    });
+                    const response = await sendWhatsAppResponse(from, 'Tidak ada reminder berulang yang aktif untuk dibatalkan 😊');
+                    return res.status(200).json(response);
                 }
 
                 for (const rem of activeReminders) {
@@ -58,11 +69,8 @@ module.exports = {
                     cancelReminder(rem.id);
                 }
 
-                return res.json({
-                    action: 'reply',
-                    to: from,
-                    body: `✅ ${activeReminders.length} reminder berulang berhasil dibatalkan!`
-                });
+                const response = await sendWhatsAppResponse(from, `✅ ${activeReminders.length} reminder berulang berhasil dibatalkan!`);
+                return res.status(200).json(response);
             }
 
             if (ai.intent === 'cancel_all') {
@@ -76,11 +84,8 @@ module.exports = {
                 });
 
                 if (allActiveReminders.length === 0) {
-                    return res.json({
-                        action: 'reply',
-                        to: from,
-                        body: 'Tidak ada reminder aktif untuk dibatalkan 😊'
-                    });
+                    const response = await sendWhatsAppResponse(from, 'Tidak ada reminder aktif untuk dibatalkan 😊');
+                    return res.status(200).json(response);
                 }
 
                 for (const rem of allActiveReminders) {
@@ -89,11 +94,8 @@ module.exports = {
                     cancelReminder(rem.id);
                 }
 
-                return res.json({
-                    action: 'reply',
-                    to: from,
-                    body: `✅ Semua ${allActiveReminders.length} reminder berhasil dibatalkan!`
-                });
+                const response = await sendWhatsAppResponse(from, `✅ Semua ${allActiveReminders.length} reminder berhasil dibatalkan!`);
+                return res.status(200).json(response);
             }
 
             if (ai.intent === 'cancel_specific' && ai.cancelKeyword) {
@@ -108,11 +110,7 @@ module.exports = {
                 });
 
                 if (specificReminders.length === 0) {
-                    return res.json({
-                        action: 'reply',
-                        to: from,
-                        body: `Tidak ada reminder aktif yang mengandung kata "${ai.cancelKeyword}" 😊`
-                    });
+                    return sendWhatsAppResponse(from, `Tidak ada reminder aktif yang mengandung kata "${ai.cancelKeyword}" 😊`, res);
                 }
 
                 for (const rem of specificReminders) {
@@ -122,11 +120,7 @@ module.exports = {
                 }
 
                 const reminderTitles = specificReminders.map(r => `"${r.title}"`).join(', ');
-                return res.json({
-                    action: 'reply',
-                    to: from,
-                    body: `✅ ${specificReminders.length} reminder dibatalkan: ${reminderTitles}`
-                });
+                return sendWhatsAppResponse(from, `✅ ${specificReminders.length} reminder dibatalkan: ${reminderTitles}`, res);
             }
 
             if (ai.intent === 'list') {
@@ -141,11 +135,7 @@ module.exports = {
                 });
 
                 if (activeReminders.length === 0) {
-                    return res.json({
-                        action: 'reply',
-                        to: from,
-                        body: 'Tidak ada reminder aktif saat ini 😊'
-                    });
+                    return sendWhatsAppResponse(from, 'Tidak ada reminder aktif saat ini 😊', res);
                 }
 
                 let listMessage = `📋 *Daftar Reminder Aktif (${activeReminders.length}):*\n\n`;
@@ -157,11 +147,7 @@ module.exports = {
 
                 listMessage += '💡 _Ketik "stop reminder [nama]" untuk membatalkan reminder tertentu_';
 
-                return res.json({
-                    action: 'reply',
-                    to: from,
-                    body: listMessage
-                });
+                return sendWhatsAppResponse(from, listMessage, res);
             }
 
             // CREATE REMINDER
@@ -215,11 +201,7 @@ module.exports = {
                     // Cari user berdasarkan username
                     const targetUser = await User.findOne({ where: { username } });
                     if (!targetUser) {
-                        return res.json({
-                            action: 'reply',
-                            to: from,
-                            body: `User @${username} tidak ditemukan. Pastikan username benar dan user sudah terdaftar.`
-                        });
+                        return sendWhatsAppResponse(from, `User @${username} tidak ditemukan. Pastikan username benar dan user sudah terdaftar.`, res);
                     }
 
                     // Cek apakah sudah berteman
@@ -233,11 +215,7 @@ module.exports = {
                     });
 
                     if (!friendship) {
-                        return res.json({
-                            action: 'reply',
-                            to: from,
-                            body: `Kamu belum berteman dengan @${username}. Kirim undangan pertemanan dulu ya 😊`
-                        });
+                        return sendWhatsAppResponse(from, `Kamu belum berteman dengan @${username}. Kirim undangan pertemanan dulu ya 😊`, res);
                     }
 
                     recipients.push(targetUser);
@@ -297,11 +275,7 @@ module.exports = {
                 count: createdReminders.length
             });
 
-            return res.json({
-                action: 'reply',
-                to: from,
-                body: confirmMsg
-            });
+            return sendWhatsAppResponse(from, confirmMsg, res);
         } catch (err) {
             console.error('ERROR WA INBOUND', err);
             return res.status(500).json({ message: 'Internal server error' });
