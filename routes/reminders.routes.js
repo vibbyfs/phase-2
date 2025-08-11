@@ -6,5 +6,6 @@ router.get('/', ReminderController.getReminders);
 router.post('/', ReminderController.createReminder);
 router.put('/:id', ReminderController.updateReminder);
 router.delete('/:id', ReminderController.deleteReminder);
+router.delete('/recurring/cancel', ReminderController.cancelRecurringReminders);
 
 module.exports = router;

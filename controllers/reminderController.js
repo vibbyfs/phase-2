@@ -108,8 +108,8 @@ class ReminderController {
       }
 
       if (repeat !== undefined) {
-        const allowedRepeat = ['none', 'daily', 'weekly'];
-        if (!allowedRepeat.includes(repeat)) throw { name: 'BadRequest', message: 'Repeat tidak valid (none/daily/weekly).' };
+        const allowedRepeat = ['none', 'daily', 'weekly', 'monthly'];
+        if (!allowedRepeat.includes(repeat)) throw { name: 'BadRequest', message: 'Repeat tidak valid (none/daily/weekly/monthly).' };
         reminder.repeat = repeat;
         needReschedule = true;
       }
@@ -151,6 +151,39 @@ class ReminderController {
       await reminder.save();
 
       res.status(200).json({ message: 'Reminder berhasil dibatalkan.' });
+    } catch (err) {
+      next(err);
+    }
+  }
+  static async cancelRecurringReminders(req, res, next) {
+    try {
+      const userId = req.user.id;
+
+      const activeReminders = await Reminder.findAll({
+        where: { 
+          UserId: userId, 
+          status: 'scheduled',
+          repeat: { [Op.ne]: 'none' }
+        }
+      });
+
+      if (activeReminders.length === 0) {
+        return res.status(200).json({ 
+          message: 'Tidak ada reminder berulang yang aktif untuk dibatalkan' 
+        });
+      }
+
+      // Batalkan semua recurring reminders
+      for (const reminder of activeReminders) {
+        reminder.status = 'cancelled';
+        await reminder.save();
+        cancelReminder(reminder.id);
+      }
+
+      res.status(200).json({ 
+        message: `${activeReminders.length} reminder berulang berhasil dibatalkan`,
+        cancelledCount: activeReminders.length
+      });
     } catch (err) {
       next(err);
     }

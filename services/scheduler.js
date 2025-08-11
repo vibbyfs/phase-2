@@ -38,6 +38,21 @@ async function scheduleReminder(reminder) {
           reminder.status = 'scheduled';
           await reminder.save();
           await scheduleReminder(reminder);
+        } else if (reminder.repeat === 'monthly') {
+          // Tambah 1 bulan dengan mempertahankan tanggal yang sama
+          const currentDate = new Date(reminder.dueAt);
+          const nextMonth = new Date(currentDate);
+          nextMonth.setMonth(currentDate.getMonth() + 1);
+          
+          // Jika tanggal tidak valid (misal 31 Jan -> 28/29 Feb), gunakan hari terakhir bulan
+          if (nextMonth.getDate() !== currentDate.getDate()) {
+            nextMonth.setDate(0); // Set ke hari terakhir bulan sebelumnya
+          }
+          
+          reminder.dueAt = nextMonth;
+          reminder.status = 'scheduled';
+          await reminder.save();
+          await scheduleReminder(reminder);
         } else {
           reminder.status = 'sent';
           await reminder.save();

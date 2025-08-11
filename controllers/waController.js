@@ -1,6 +1,7 @@
 const { DateTime } = require('luxon');
 const { User, Reminder, Friend } = require('../models');
-const { scheduleReminder } = require('../services/scheduler');
+const { Op } = require('sequelize');
+const { scheduleReminder, cancelReminder } = require('../services/scheduler');
 const { extract, generateReply } = require('../services/ai');
 
 const WIB_TZ = 'Asia/Jakarta';
@@ -52,8 +53,43 @@ module.exports = {
             const ai = await extract(text);
             console.log('[WA] parsed AI:', ai);
 
+            // Handle CANCEL intent untuk stop reminder
+            if (ai.intent === 'cancel') {
+                const activeReminders = await Reminder.findAll({
+                    where: { 
+                        UserId: user.id, 
+                        status: 'scheduled',
+                        repeat: { [Op.ne]: 'none' } // hanya recurring reminders
+                    },
+                    order: [['createdAt', 'DESC']],
+                    limit: 5
+                });
+
+                if (activeReminders.length === 0) {
+                    return res.json({
+                        action: 'reply',
+                        to: from,
+                        body: 'Tidak ada reminder berulang yang aktif untuk dibatalkan 😊'
+                    });
+                }
+
+                // Batalkan semua recurring reminders
+                for (const rem of activeReminders) {
+                    rem.status = 'cancelled';
+                    await rem.save();
+                    cancelReminder(rem.id);
+                }
+
+                return res.json({
+                    action: 'reply',
+                    to: from,
+                    body: `✅ ${activeReminders.length} reminder berulang berhasil dibatalkan!`
+                });
+            }
+
             let title = (ai.title || '').trim() || extractTitleFromText(text);
             let dueAtUTC = ai.dueAtUTC;
+            let repeat = ai.repeat || 'none';
 
             const t = (text || '').toLowerCase();
             const nowWIB = DateTime.now().setZone(WIB_TZ);
@@ -86,49 +122,91 @@ module.exports = {
                 dueDate = nowWIB.plus({ minutes: 5 }).toUTC().toJSDate();
             }
 
-            console.log('[WA] final title:', title, 'dueDateJS:', dueDate.toISOString());
+            console.log('[WA] final title:', title, 'dueDateJS:', dueDate.toISOString(), 'repeat:', repeat);
 
-            // Jika AI tidak memberikan formattedMessage atau title berubah, buat formattedMessage baru
-            let formattedMessage = ai.formattedMessage;
-            if (!formattedMessage || (ai.title && ai.title !== title)) {
-                // Buat pesan sederhana yang ramah
-                const userName = user.name || 'Kamu';
-                const timeStr = DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm');
-                formattedMessage = `Hay ${userName} 👋, waktunya untuk *${title}* pada jam ${timeStr} WIB! Jangan lupa ya 😊`;
+            // Cari recipients berdasarkan username jika ada
+            let recipients = [];
+            if (ai.recipientUsernames && ai.recipientUsernames.length > 0) {
+                console.log('[WA] searching for usernames:', ai.recipientUsernames);
+                for (const username of ai.recipientUsernames) {
+                    const cleanUsername = username.replace('@', '');
+                    // Cari user berdasarkan username (asumsi field username ada di tabel User)
+                    const targetUser = await User.findOne({ where: { username: cleanUsername } });
+                    if (targetUser) {
+                        // Cek apakah adalah teman yang diterima
+                        const friendship = await Friend.findOne({
+                            where: { 
+                                UserId: user.id, 
+                                FriendId: targetUser.id, 
+                                status: 'accepted' 
+                            }
+                        });
+                        if (friendship) {
+                            recipients.push(targetUser);
+                        }
+                    }
+                }
             }
 
-            // Buat reminder default RecipientId null (untuk diri sendiri)
-            const reminder = await Reminder.create({
-                UserId: user.id,
-                RecipientId: null,
-                title,
-                dueAt: dueDate,
-                repeat: 'none',
-                status: 'scheduled',
-                formattedMessage: formattedMessage
-            });
-
-            // Kalau ada recipientPhone dari AI, update jika valid
-            if (ai.recipientPhone) {
+            // Jika tidak ada recipients dari username, cek recipientPhone
+            if (recipients.length === 0 && ai.recipientPhone) {
                 const recipient = await User.findOne({ where: { phone: ai.recipientPhone } });
                 if (recipient) {
                     const rel = await Friend.findOne({
                         where: { UserId: user.id, FriendId: recipient.id, status: 'accepted' }
                     });
                     if (rel) {
-                        reminder.RecipientId = recipient.id;
-                        await reminder.save();
+                        recipients.push(recipient);
                     }
                 }
             }
 
-            // Jadwalkan
-            await scheduleReminder(reminder);
+            // Jika masih tidak ada recipients, buat untuk diri sendiri
+            if (recipients.length === 0) {
+                recipients.push(user);
+            }
+
+            const createdReminders = [];
+
+            // Buat reminder untuk setiap recipient
+            for (const recipient of recipients) {
+                // Jika AI tidak memberikan formattedMessage atau title berubah, buat formattedMessage baru
+                let formattedMessage = ai.formattedMessage;
+                if (!formattedMessage || (ai.title && ai.title !== title)) {
+                    // Buat pesan sederhana yang ramah
+                    const recipientName = recipient.name || recipient.username || 'Kamu';
+                    const timeStr = DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm');
+                    formattedMessage = `Hay ${recipientName} 👋, waktunya untuk *${title}* pada jam ${timeStr} WIB! Jangan lupa ya 😊`;
+                }
+
+                const reminder = await Reminder.create({
+                    UserId: user.id,
+                    RecipientId: recipient.id === user.id ? null : recipient.id,
+                    title,
+                    dueAt: dueDate,
+                    repeat: repeat,
+                    status: 'scheduled',
+                    formattedMessage: formattedMessage
+                });
+
+                // Jadwalkan
+                await scheduleReminder(reminder);
+                createdReminders.push(reminder);
+            }
 
             // Buat response konfirmasi yang ramah menggunakan AI
+            const recipientNames = recipients.length > 1 
+                ? recipients.map(r => r.name || r.username || 'Unknown').join(', ')
+                : (recipients[0].id === user.id ? 'diri sendiri' : recipients[0].name || recipients[0].username || 'Unknown');
+            
+            const repeatText = repeat !== 'none' ? ` (${repeat === 'daily' ? 'setiap hari' : repeat === 'weekly' ? 'setiap minggu' : 'setiap bulan'})` : '';
+            
             const confirmMsg = await generateReply('confirm', {
                 title,
-                dueTime: DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('dd/MM/yyyy HH:mm') + ' WIB'
+                recipients: recipientNames,
+                dueTime: DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('dd/MM/yyyy HH:mm') + ' WIB',
+                repeat: repeatText,
+                count: createdReminders.length
             });
 
             return res.json({

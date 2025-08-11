@@ -38,7 +38,9 @@ const Extraction = z.object({
   timeText: z.string().optional(),
   recipientPhone: z.string().optional(),
   recipientName: z.string().optional(),
+  recipientUsernames: z.array(z.string()).optional(), // Array of @usernames
   dueAtWIB: z.string().optional(),
+  repeat: z.enum(['none','daily','weekly','monthly']).optional(),
   formattedMessage: z.string().optional()
 });
 
@@ -52,13 +54,28 @@ Kamu adalah AI ekstraksi WhatsApp yang ramah dan natural. Tugas kamu:
   "title": "judul singkat dari aktivitas yang akan diingatkan (≤5 kata, tanpa kata 'pengingat')",
   "recipientName": "nama orang yang akan diingatkan (jika ada)",
   "recipientPhone": "nomor telepon penerima (jika ada)",
+  "recipientUsernames": ["array username dengan @, contoh: ['@john', '@jane']"],
   "dueAtWIB": "waktu dalam ISO format zona ${WIB_TZ}",
+  "repeat": "none/daily/weekly/monthly berdasarkan permintaan user",
   "formattedMessage": "pesan reminder yang ramah dan motivasional"
 }
 
 2. WAKTU: Zona waktu input ${WIB_TZ}. Isi "dueAtWIB" (ISO) untuk waktu absolut/relatif ("5 menit lagi", "jam 7", "besok", dll).
 
-3. TITLE: Ekstrak aktivitas dari pesan, JANGAN gunakan kata "pengingat" atau "reminder". 
+3. REPEAT: Deteksi pola pengulangan:
+   - "setiap hari" / "daily" → "daily"
+   - "setiap minggu" / "weekly" → "weekly"  
+   - "setiap bulan" / "monthly" → "monthly"
+   - default → "none"
+
+4. USERNAME TAGGING: Ekstrak @username dari pesan:
+   - Contoh: "ingetin @john @jane meeting" → recipientUsernames: ["@john", "@jane"]
+   - Jika ada @username, abaikan recipientPhone dan recipientName
+
+5. CANCEL INTENT: Deteksi kata "stop", "batal", "cancel", "hapus reminder":
+   - Jika ada, set intent: "cancel"
+
+6. TITLE: Ekstrak aktivitas dari pesan, JANGAN gunakan kata "pengingat" atau "reminder". 
    Contoh: "ingetin minum air putih" → title: "Minum Air Putih"
    Contoh: "tolong ingatkan meeting zoom" → title: "Meeting Zoom"
    Contoh: "reminder makan obat" → title: "Makan Obat"
@@ -96,8 +113,10 @@ HANYA keluarkan JSON, tidak ada teks lain.
       timeText: null, 
       recipientPhone: null, 
       recipientName: null,
+      recipientUsernames: extractUsernames(message),
       dueAtWIB: null, 
       dueAtUTC: null,
+      repeat: extractRepeat(message),
       formattedMessage: null
     };
   }
@@ -118,8 +137,10 @@ HANYA keluarkan JSON, tidak ada teks lain.
       timeText: null, 
       recipientPhone: null, 
       recipientName: null,
+      recipientUsernames: extractUsernames(message),
       dueAtWIB: null, 
       dueAtUTC: null,
+      repeat: extractRepeat(message),
       formattedMessage: null
     };
   }
@@ -133,8 +154,10 @@ HANYA keluarkan JSON, tidak ada teks lain.
       timeText: null, 
       recipientPhone: null, 
       recipientName: null,
+      recipientUsernames: extractUsernames(message),
       dueAtWIB: null, 
       dueAtUTC: null,
+      repeat: extractRepeat(message),
       formattedMessage: null
     };
   }
@@ -176,6 +199,28 @@ function extractTitleFromTextAI(text) {
     return 'Pengingat';
 }
 
+// Fungsi untuk mengekstrak usernames dari teks
+function extractUsernames(text) {
+    if (!text) return [];
+    
+    // Ekstrak semua @username dari teks
+    const matches = text.match(/@\w+/gi);
+    return matches ? matches.map(u => u.toLowerCase()) : [];
+}
+
+// Fungsi untuk mengekstrak repeat pattern dari teks
+function extractRepeat(text) {
+    if (!text) return 'none';
+    
+    const lowerText = text.toLowerCase();
+    
+    if (/(setiap\s*hari|daily|harian)/i.test(lowerText)) return 'daily';
+    if (/(setiap\s*minggu|weekly|mingguan)/i.test(lowerText)) return 'weekly';
+    if (/(setiap\s*bulan|monthly|bulanan)/i.test(lowerText)) return 'monthly';
+    
+    return 'none';
+}
+
 async function generateReply(mode, vars) {
   const systemMsg = `
 Kamu adalah asisten WhatsApp yang ramah dan natural dalam bahasa Indonesia sehari-hari.
@@ -211,7 +256,14 @@ Gaya bahasa: Seperti teman yang membantu, bukan robot formal.
     // fallback yang lebih ramah
     switch (mode) {
       case 'confirm':
-        return '✅ Siap! Remindernya sudah kusiapkan. Nanti aku ingatkan tepat waktu ya! 😊';
+        const { title, recipients, dueTime, repeat, count } = vars || {};
+        let msg = `✅ Siap! Reminder "${title || 'kegiatan'}" sudah kusiapkan`;
+        if (recipients && recipients !== 'diri sendiri') msg += ` untuk ${recipients}`;
+        if (dueTime) msg += ` pada ${dueTime}`;
+        if (repeat) msg += `${repeat}`;
+        if (count > 1) msg += ` (${count} reminder dibuat)`;
+        msg += '! Nanti aku ingatkan tepat waktu ya! 😊';
+        return msg;
       case 'error':
         return '😅 Oops, ada sedikit kendala. Coba ulangi lagi ya, atau hubungi admin kalau masih bermasalah.';
       default:
