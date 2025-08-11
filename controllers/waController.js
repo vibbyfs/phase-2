@@ -29,6 +29,7 @@ async function sendWhatsAppResponse(to, message) {
 module.exports = {
     inbound: async (req, res) => {
         try {
+            // Whapify.id webhook format
             const { from, message } = req.body;
             const text = message?.text || message || req.body.text;
             
@@ -47,32 +48,6 @@ module.exports = {
 
             // Handle CANCEL intents untuk stop reminder
             if (ai.intent === 'cancel') {
-                // Mendukung format Whapify dan format lama
-                let from = req.body.from || req.body.phone;
-                let text = null;
-                if (req.body.message && typeof req.body.message === 'object') {
-                    text = req.body.message.text;
-                } else if (req.body.message) {
-                    text = req.body.message;
-                } else if (req.body.text) {
-                    text = req.body.text;
-                }
-
-                console.log('[WA] inbound from:', from, 'text:', text);
-
-                // Cari user berdasarkan phone
-                const user = await User.findOne({ where: { phone: from } });
-                if (!user) {
-                    const response = await sendWhatsAppResponse(from, 'Nomormu belum terdaftar di sistem. Silakan daftar dulu ya 😊');
-                    return res.status(200).json(response);
-                }
-
-                // Extract pesan menggunakan AI
-                const ai = await extract(text);
-                console.log('[WA] parsed AI:', ai);
-
-                // Handle CANCEL intents untuk stop reminder
-                if (ai.intent === 'cancel') {
                 // Cancel hanya recurring reminders
                 const activeReminders = await Reminder.findAll({
                     where: { 
